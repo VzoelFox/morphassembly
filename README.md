@@ -11,36 +11,43 @@ Proyek ini mematuhi prinsip "Tanpa Jalan Pintas".
 ## Struktur Proyek
 - `ISA.md`: Definisi Instruction Set Architecture (Opcode & Logika).
 - `build_vm.py`: Script Python yang berfungsi sebagai "Assembler Manual" untuk menghasilkan executable VM (`morph_vm`) dari kode hex mentah.
-- `build_sample.py`: Script untuk membuat program contoh MorphAssembly (`first_program.bin`).
+- `build_sample.py`: Script untuk membuat program contoh MorphAssembly (Bytecode).
+
+## Fitur Utama (v0.4)
+- **Core**: Stack-based architecture dengan register internal minimal.
+- **Compute**: Aritmatika (`ADD`, `SUB`), Logika (`EQ`), Stack (`PUSH`, `POP`, `DUP`).
+- **Flow Control**: `JMP`, `JZ` (Conditional Branching).
+- **IO**: `PRINT` (Mencetak angka desimal ke STDOUT).
+- **Memory**: Linear Memory Model (`LOAD`, `STORE`) untuk manipulasi data (RAM).
 
 ## Cara Menggunakan
 
 ### 1. Build VM
-Karena kita tidak menggunakan compiler, kita menggunakan generator hex untuk membuat executable Linux.
+VM dibangun langsung dari definisi Python ke ELF64 Binary.
 ```bash
 python3 build_vm.py
 chmod +x morph_vm
 ```
 
 ### 2. Buat Program Contoh
-Buat file bytecode `first_program.bin` yang berisi instruksi untuk VM.
-Contoh ini membuat program yang melakukan `PUSH 42` dan `EXIT`.
+Saat ini, script dikonfigurasi untuk membuat tes manipulasi memori (`memory_swap_test.bin`).
 ```bash
 python3 build_sample.py
 ```
 
 ### 3. Jalankan
-Jalankan VM. VM akan otomatis mencari `first_program.bin` di direktori yang sama, membacanya, dan mengeksekusinya.
-Hasil eksekusi (untuk saat ini) dikembalikan sebagai Exit Code proses.
+Jalankan VM. VM akan otomatis mencari `memory_swap_test.bin` di direktori yang sama.
 ```bash
 ./morph_vm
-echo "Exit Code: $?"
 ```
-Harusnya outputnya: `Exit Code: 42`.
+**Output yang diharapkan (Memory Test):**
+```
+222  (Overwrite Test)
+20   (Swap Result A)
+10   (Swap Result B)
+0    (Zeroing Test)
+```
 
-Jika file tidak ditemukan, VM akan exit dengan kode `1`.
-
-## Status Saat Ini (v0.0.1)
-- **Proof of Concept**: VM berhasil membaca file biner eksternal dan mengeksekusi instruksi dasar.
-- **Support**: Hanya instruksi `PUSH` (sebagai demonstrasi passing data) dan `EXIT`.
-- **Robustness**: Error handling dasar untuk pembukaan file.
+## Status Saat Ini (v0.4)
+- **Linear Memory**: VM memiliki akses ke area Heap (64KB) untuk menyimpan variabel.
+- **Robustness**: Error handling untuk file tidak ditemukan, dan perbaikan logika jump offset dinamis.

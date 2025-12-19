@@ -46,6 +46,7 @@ elf_header += p16(0)                  # String Table Index
 # R15: Code Pointer (Current IP)
 # R14: Stack Pointer (VM Stack)
 # R13: Buffer Base (Start of Code Buffer / Global Base)
+# R12: Heap Pointer (Start of Heap Memory)
 
 code = b''
 
@@ -104,7 +105,7 @@ code += b'\x0F\x05'
 
 
 # --- VM Initialization ---
-# R13 = Buffer Base
+# R13 = Buffer Base (Code Start)
 # lea r13, [rel buffer]
 code += b'\x4C\x8D\x2D\x00\x00\x00\x00'
 off_buffer_init = len(code) - 4
@@ -113,9 +114,15 @@ off_buffer_init = len(code) - 4
 # mov r15, r13
 code += b'\x4D\x89\xEF'
 
-# R14 = Stack Pointer (End of Buffer + Stack Space)
+# R14 = Stack Pointer (End of Code Buffer + Stack Space)
+# Stack starts at 4KB after Code.
 # lea r14, [r13 + 4096]
 code += b'\x4D\x8D\xB5\x00\x10\x00\x00'
+
+# R12 = Heap Pointer (After Stack)
+# Stack size = 4KB. Heap starts at 8KB from Code Base.
+# lea r12, [r13 + 8192]
+code += b'\x4D\x8D\xA5\x00\x20\x00\x00'
 
 
 # --- Main Loop ---
@@ -174,6 +181,17 @@ off_je_dup = len(code) - 4
 code += b'\x3C\x09'
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_print = len(code) - 4
+
+# Case 0x0A: LOAD
+code += b'\x3C\x0A'
+code += b'\x0F\x84\x00\x00\x00\x00'
+off_je_load = len(code) - 4
+
+# Case 0x0B: STORE
+code += b'\x3C\x0B'
+code += b'\x0F\x84\x00\x00\x00\x00'
+off_je_store = len(code) - 4
+
 
 # Default: Skip
 # inc r15
@@ -261,99 +279,83 @@ code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 code += b'\x49\x83\xC7\x05' # add r15, 5
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
-# HANDLER: PRINT (FIXED JUMPS)
+
+# HANDLER: LOAD
+# Pop Address -> Read from Heap[Address] -> Push Value
+label_load = len(code)
+# Pop Address
+code += b'\x49\x83\xEE\x08' # sub r14, 8
+code += b'\x41\x8B\x1E'     # mov ebx, [r14] (Address - assume 32bit offset)
+# Read from Heap [r12 + rbx]
+code += b'\x49\x8B\x04\x1C' # mov rax, [r12 + rbx]
+# Push Value (Overwrite Address on stack)
+code += b'\x49\x89\x06'     # mov [r14], rax
+code += b'\x49\x83\xC6\x08' # add r14, 8
+# Next
+code += b'\x49\xFF\xC7'     # inc r15
+code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
+
+
+# HANDLER: STORE
+# Pop Address, Pop Value -> Heap[Address] = Value
+label_store = len(code)
+# Pop Address
+code += b'\x49\x83\xEE\x08' # sub r14, 8
+code += b'\x41\x8B\x1E'     # mov ebx, [r14]
+# Pop Value
+code += b'\x49\x83\xEE\x08' # sub r14, 8
+code += b'\x49\x8B\x06'     # mov rax, [r14] (Value 64bit)
+# Store to Heap [r12 + rbx]
+code += b'\x49\x89\x04\x1C' # mov [r12 + rbx], rax
+# Next
+code += b'\x49\xFF\xC7'     # inc r15
+code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
+
+
+# HANDLER: PRINT
 label_print = len(code)
-# Pop Number
 code += b'\x49\x83\xEE\x08' # sub r14, 8
 code += b'\x41\x8B\x06'     # mov eax, [r14]
-
-# r10 = End of buffer (r14 + 32)
 code += b'\x4D\x8D\x56\x20'
-# mov r11, r10 (Save End)
 code += b'\x4D\x89\xD3'
-# mov byte [r10], 10 (\n)
 code += b'\x41\xC6\x02\x0A'
-# dec r10
 code += b'\x49\xFF\xCA'
-
-# Handle 0
-# test eax, eax
 code += b'\x85\xC0'
-
-# Placeholder for JNZ loop_itoa
 off_jnz_loop_itoa_start = len(code)
-code += b'\x75\x00' # JNZ +0
-
-# Zero case
-code += b'\x41\xC6\x02\x30' # mov byte [r10], '0'
-code += b'\x49\xFF\xCA'     # dec r10
-
-# Placeholder for JMP do_write
+code += b'\x75\x00'
+code += b'\x41\xC6\x02\x30'
+code += b'\x49\xFF\xCA'
 off_jmp_do_write = len(code)
-code += b'\xEB\x00' # JMP +0
-
-# Loop Itoa Start
+code += b'\xEB\x00'
 label_loop_itoa = len(code)
-# Patch JNZ loop_itoa (at start) to point here
-# JNZ is at off_jnz_loop_itoa_start.
-# Target is label_loop_itoa.
-# Offset = Target - (Pos + 2)
 offset = label_loop_itoa - (off_jnz_loop_itoa_start + 2)
 code_list = bytearray(code)
 code_list[off_jnz_loop_itoa_start + 1] = offset
 code = bytes(code_list)
-
-
-# mov ebx, 10
 code += b'\xBB\x0A\x00\x00\x00'
-# xor edx, edx
 code += b'\x31\xD2'
-# div ebx
 code += b'\xF7\xF3'
-# add dl, '0'
 code += b'\x80\xC2\x30'
-# mov [r10], dl
 code += b'\x41\x88\x12'
-# dec r10
 code += b'\x49\xFF\xCA'
-# test eax, eax
 code += b'\x85\xC0'
-# jnz loop_itoa
-# JNZ back to label_loop_itoa
 offset = label_loop_itoa - (len(code) + 2)
-# Convert negative offset to signed byte
-if offset < 0:
-    offset = 256 + offset
+if offset < 0: offset = 256 + offset
 code += b'\x75' + p8(offset)
-
-# DO WRITE
 label_do_write = len(code)
-# Patch JMP do_write
 offset = label_do_write - (off_jmp_do_write + 2)
 code_list = bytearray(code)
 code_list[off_jmp_do_write + 1] = offset
 code = bytes(code_list)
-
-# inc r10 (Start of string)
 code += b'\x49\xFF\xC2'
-# mov rsi, r10
 code += b'\x4C\x89\xD6'
-# Length calculation: r11 - r10 + 1
-code += b'\x4C\x89\xDA' # mov rdx, r11
-code += b'\x4C\x29\xD2' # sub rdx, r10
-code += b'\x48\xFF\xC2' # inc rdx
-
-# mov edi, 1 (stdout)
+code += b'\x4C\x89\xDA'
+code += b'\x4C\x29\xD2'
+code += b'\x48\xFF\xC2'
 code += b'\xBF\x01\x00\x00\x00'
-# mov eax, 1 (write)
 code += b'\xB8\x01\x00\x00\x00'
-# syscall
 code += b'\x0F\x05'
-
-# Finish PRINT
-# inc r15
 code += b'\x49\xFF\xC7'
-# jmp loop_start
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 
@@ -390,6 +392,8 @@ code = patch(code, off_je_jz, label_jz)
 code = patch(code, off_je_eq, label_eq)
 code = patch(code, off_je_dup, label_dup)
 code = patch(code, off_je_print, label_print)
+code = patch(code, off_je_load, label_load)
+code = patch(code, off_je_store, label_store)
 code = patch(code, off_je_exit, label_exit)
 
 # Patch Error
@@ -398,7 +402,7 @@ code = patch(code, off_err_read, label_error)
 
 # Data Section
 pos_data = len(code)
-filename_str = b"print_test.bin\x00"
+filename_str = b"memory_swap_test.bin\x00"
 code += filename_str
 
 pos_buffer = len(code)
@@ -411,7 +415,8 @@ code = patch_lea(code, off_buffer_init, pos_buffer)
 
 # Finalizing ELF
 total_size = 120 + len(code)
-mem_size = total_size + 8192 # More stack space
+# Memory Layout: Code + Stack(4K) + Heap(64K)
+mem_size = total_size + 4096 + 65536
 
 phdr = b''
 phdr += p32(1)
@@ -428,4 +433,4 @@ with open('morph_vm', 'wb') as f:
     f.write(phdr)
     f.write(code)
 
-print(f"VM v0.3 built successfully. Size: {total_size} bytes.")
+print(f"VM v0.4 built successfully. Size: {total_size} bytes.")
