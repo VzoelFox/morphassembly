@@ -2,17 +2,15 @@ import struct
 import sys
 
 # Konfigurasi ELF64
-# Kita butuh buffer memory yang cukup besar untuk Stack VM.
-# Kita akan alokasikan area statis di segmen .bss (setelah code) untuk Stack.
 
 def p64(val):
     return struct.pack('<Q', val)
 
 def p32(val):
-    return struct.pack('<i', val) # Signed 32-bit for Offsets
+    return struct.pack('<i', val)
 
 def u32(val):
-    return struct.pack('<I', val) # Unsigned 32-bit
+    return struct.pack('<I', val)
 
 def p16(val):
     return struct.pack('<H', val)
@@ -45,9 +43,9 @@ elf_header += p16(0)                  # String Table Index
 # 2. Code Generation
 # ------------------
 # Register Allocation:
-# R15: Code Pointer (Current IP - Absolute Address in Buffer)
+# R15: Code Pointer (Current IP)
 # R14: Stack Pointer (VM Stack)
-# R13: Buffer Base (Start of Code Buffer)
+# R13: Buffer Base (Start of Code Buffer / Global Base)
 
 code = b''
 
@@ -55,7 +53,7 @@ code = b''
 # 1. Open File
 # mov eax, 2 (open)
 code += b'\xB8\x02\x00\x00\x00'
-# lea rdi, [rel filename] (Placeholder)
+# lea rdi, [rel filename]
 code += b'\x48\x8D\x3D\x00\x00\x00\x00'
 off_filename = len(code) - 4
 # xor rsi, rsi (O_RDONLY)
@@ -68,20 +66,20 @@ code += b'\x0F\x05'
 # Check Error (Open)
 # test rax, rax
 code += b'\x48\x85\xC0'
-# js error_handler (Placeholder)
-code += b'\x0F\x88\x00\x00\x00\x00' # Long Jump (JJS) to be safe
+# js error_handler
+code += b'\x0F\x88\x00\x00\x00\x00'
 off_err_open = len(code) - 4
 
 # Save FD
 # mov r12d, eax
 code += b'\x41\x89\xC4'
 
-# 2. Read File content to Buffer (Start of BSS/Data)
+# 2. Read File content to Buffer
 # mov edi, r12d
 code += b'\x44\x89\xE7'
 # mov eax, 0 (read)
 code += b'\xB8\x00\x00\x00\x00'
-# lea rsi, [rel buffer] (Placeholder)
+# lea rsi, [rel buffer]
 code += b'\x48\x8D\x35\x00\x00\x00\x00'
 off_buffer_read = len(code) - 4
 # mov edx, 4096 (Max code size)
@@ -89,14 +87,14 @@ code += b'\xBA\x00\x10\x00\x00'
 # syscall
 code += b'\x0F\x05'
 
-# Check Error (Read) - if 0 or negative
+# Check Error (Read)
 # test rax, rax
 code += b'\x48\x85\xC0'
 # jle error_handler
 code += b'\x0F\x8E\x00\x00\x00\x00'
 off_err_read = len(code) - 4
 
-# Close File (Good practice)
+# Close File
 # mov edi, r12d
 code += b'\x44\x89\xE7'
 # mov eax, 3 (close)
@@ -115,83 +113,69 @@ off_buffer_init = len(code) - 4
 # mov r15, r13
 code += b'\x4D\x89\xEF'
 
-# R14 = Stack Pointer (Use High Memory / End of Buffer + Stack Space)
-# lea r14, [r13 + 4096] (Start of stack area)
+# R14 = Stack Pointer (End of Buffer + Stack Space)
+# lea r14, [r13 + 4096]
 code += b'\x4D\x8D\xB5\x00\x10\x00\x00'
 
 
-# --- Main Loop (Fetch-Decode-Execute) ---
+# --- Main Loop ---
 label_loop_start = len(code)
 
 # Fetch Byte: movzx eax, byte ptr [r15]
 code += b'\x41\x0F\xB6\x07'
 
-# --- Dispatcher (Switch Case) ---
-
+# --- Dispatcher ---
 # Case 0xFF: EXIT
-# cmp al, 0xFF
 code += b'\x3C\xFF'
-# je label_exit
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_exit = len(code) - 4
 
-# Case 0x01: PUSH (9 bytes instruction)
-# cmp al, 0x01
+# Case 0x01: PUSH
 code += b'\x3C\x01'
-# je label_push
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_push = len(code) - 4
 
 # Case 0x02: POP
-# cmp al, 0x02
 code += b'\x3C\x02'
-# je label_pop
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_pop = len(code) - 4
 
 # Case 0x03: ADD
-# cmp al, 0x03
 code += b'\x3C\x03'
-# je label_add
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_add = len(code) - 4
 
 # Case 0x04: SUB
-# cmp al, 0x04
 code += b'\x3C\x04'
-# je label_sub
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_sub = len(code) - 4
 
-# Case 0x05: JMP (5 bytes instruction: Op + 4 byte offset)
-# cmp al, 0x05
+# Case 0x05: JMP
 code += b'\x3C\x05'
-# je label_jmp
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_jmp = len(code) - 4
 
-# Case 0x06: JZ (5 bytes instruction)
-# cmp al, 0x06
+# Case 0x06: JZ
 code += b'\x3C\x06'
-# je label_jz
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_jz = len(code) - 4
 
 # Case 0x07: EQ
-# cmp al, 0x07
 code += b'\x3C\x07'
-# je label_eq
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_eq = len(code) - 4
 
 # Case 0x08: DUP
-# cmp al, 0x08
 code += b'\x3C\x08'
-# je label_dup
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_dup = len(code) - 4
 
-# Default: Skip / NOP / Error (Just loop next byte)
+# Case 0x09: PRINT
+code += b'\x3C\x09'
+code += b'\x0F\x84\x00\x00\x00\x00'
+off_je_print = len(code) - 4
+
+# Default: Skip
 # inc r15
 code += b'\x49\xFF\xC7'
 # jmp loop_start
@@ -202,175 +186,201 @@ code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 # HANDLER: PUSH
 label_push = len(code)
-# Value at [r15+1] (64-bit)
-# mov rax, [r15+1]
-code += b'\x49\x8B\x47\x01'
-# Push to VM Stack: mov [r14], rax; add r14, 8
-code += b'\x49\x89\x06'
-code += b'\x49\x83\xC6\x08'
-# Advance IP by 9
-code += b'\x49\x83\xC7\x09'
-# Jmp Loop
+code += b'\x49\x8B\x47\x01' # mov rax, [r15+1]
+code += b'\x49\x89\x06'     # mov [r14], rax
+code += b'\x49\x83\xC6\x08' # add r14, 8
+code += b'\x49\x83\xC7\x09' # add r15, 9
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 # HANDLER: POP
 label_pop = len(code)
-# sub r14, 8
-code += b'\x49\x83\xEE\x08'
-# Advance IP by 1
-code += b'\x49\xFF\xC7'
-# Jmp Loop
+code += b'\x49\x83\xEE\x08' # sub r14, 8
+code += b'\x49\xFF\xC7'     # inc r15
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 # HANDLER: ADD
 label_add = len(code)
-# sub r14, 16 (Back 2 items)
-code += b'\x49\x83\xEE\x10'
-# mov rax, [r14] (Val 1)
-code += b'\x41\x8B\x06'
-# mov rbx, [r14+8] (Val 2)
-code += b'\x41\x8B\x5E\x08'
-# add rax, rbx
-code += b'\x48\x01\xD8'
-# mov [r14], rax (Push Result)
-code += b'\x49\x89\x06'
-# add r14, 8 (Adjust SP to point to next empty)
-code += b'\x49\x83\xC6\x08'
-# Advance IP by 1
-code += b'\x49\xFF\xC7'
-# Jmp Loop
+code += b'\x49\x83\xEE\x10' # sub r14, 16
+code += b'\x41\x8B\x06'     # mov eax, [r14]
+code += b'\x41\x8B\x5E\x08' # mov ebx, [r14+8]
+code += b'\x48\x01\xD8'     # add rax, rbx
+code += b'\x49\x89\x06'     # mov [r14], rax
+code += b'\x49\x83\xC6\x08' # add r14, 8
+code += b'\x49\xFF\xC7'     # inc r15
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
-# HANDLER: SUB (Val2 - Val1) Note: Stack grows up. Top is Val2?
-# Order: Push A, Push B. Stack: [A, B]. Pop -> B, Pop -> A. Result A - B.
-# Implementation:
+# HANDLER: SUB
 label_sub = len(code)
-# sub r14, 16
-code += b'\x49\x83\xEE\x10'
-# mov rax, [r14] (A)
-code += b'\x41\x8B\x06'
-# mov rbx, [r14+8] (B)
-code += b'\x41\x8B\x5E\x08'
-# sub rax, rbx (A - B)
-code += b'\x48\x29\xD8'
-# mov [r14], rax
-code += b'\x49\x89\x06'
-# add r14, 8
-code += b'\x49\x83\xC6\x08'
-# Advance IP
-code += b'\x49\xFF\xC7'
-# Jmp Loop
+code += b'\x49\x83\xEE\x10' # sub r14, 16
+code += b'\x41\x8B\x06'     # mov eax, [r14] (A)
+code += b'\x41\x8B\x5E\x08' # mov ebx, [r14+8] (B)
+code += b'\x48\x29\xD8'     # sub rax, rbx (A - B)
+code += b'\x49\x89\x06'     # mov [r14], rax
+code += b'\x49\x83\xC6\x08' # add r14, 8
+code += b'\x49\xFF\xC7'     # inc r15
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 # HANDLER: EQ
 label_eq = len(code)
-# sub r14, 16
-code += b'\x49\x83\xEE\x10'
-# mov rax, [r14]
-code += b'\x41\x8B\x06'
-# mov rbx, [r14+8]
-code += b'\x41\x8B\x5E\x08'
-# cmp rax, rbx
-code += b'\x48\x39\xD8'
-# sete al
-code += b'\x0F\x94\xC0'
-# movzx rax, al
-code += b'\x48\x0F\xB6\xC0'
-# mov [r14], rax
-code += b'\x49\x89\x06'
-# add r14, 8
-code += b'\x49\x83\xC6\x08'
-# Advance IP
-code += b'\x49\xFF\xC7'
-# Jmp Loop
+code += b'\x49\x83\xEE\x10' # sub r14, 16
+code += b'\x41\x8B\x06'     # mov rax, [r14]
+code += b'\x41\x8B\x5E\x08' # mov rbx, [r14+8]
+code += b'\x48\x39\xD8'     # cmp rax, rbx
+code += b'\x0F\x94\xC0'     # sete al
+code += b'\x48\x0F\xB6\xC0' # movzx rax, al
+code += b'\x49\x89\x06'     # mov [r14], rax
+code += b'\x49\x83\xC6\x08' # add r14, 8
+code += b'\x49\xFF\xC7'     # inc r15
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 # HANDLER: DUP
 label_dup = len(code)
-# mov rax, [r14-8] (Peek Top)
-code += b'\x49\x8B\x46\xF8'
-# mov [r14], rax (Push)
-code += b'\x49\x89\x06'
-# add r14, 8
-code += b'\x49\x83\xC6\x08'
-# Advance IP
-code += b'\x49\xFF\xC7'
-# Jmp Loop
+code += b'\x49\x8B\x46\xF8' # mov rax, [r14-8]
+code += b'\x49\x89\x06'     # mov [r14], rax
+code += b'\x49\x83\xC6\x08' # add r14, 8
+code += b'\x49\xFF\xC7'     # inc r15
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 # HANDLER: JMP
 label_jmp = len(code)
-# Read offset (signed 32-bit) at [r15+1]
-# movsxd rax, dword ptr [r15+1]
-code += b'\x49\x63\x47\x01'
-# add r15, rax (Apply Jump)
-code += b'\x49\x01\xC7'
-# Do NOT advance IP manually, jump includes the instruction size adjustment usually?
-# Let's say JMP offset is relative to START of instruction.
-# So if offset is 0, infinite loop.
-# Jmp Loop
+code += b'\x49\x63\x47\x01' # movsxd rax, [r15+1]
+code += b'\x49\x01\xC7'     # add r15, rax
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 # HANDLER: JZ
 label_jz = len(code)
-# Pop Check
-# sub r14, 8
-code += b'\x49\x83\xEE\x08'
-# mov rax, [r14]
-code += b'\x41\x8B\x06'
-# test rax, rax
-code += b'\x48\x85\xC0'
-# jnz no_jump
-code += b'\x75\x0C'
+code += b'\x49\x83\xEE\x08' # sub r14, 8
+code += b'\x41\x8B\x06'     # mov rax, [r14]
+code += b'\x48\x85\xC0'     # test rax, rax
+code += b'\x75\x0C'         # jnz no_jump (+12)
 # DO JUMP:
-# movsxd rax, dword ptr [r15+1]
-code += b'\x49\x63\x47\x01'
-# add r15, rax
-code += b'\x49\x01\xC7'
-# jmp loop_start
+code += b'\x49\x63\x47\x01' # movsxd rax, [r15+1]
+code += b'\x49\x01\xC7'     # add r15, rax
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
-
 # NO JUMP:
-# Advance IP by 5 (Op + 4 byte)
-code += b'\x49\x83\xC7\x05'
-# jmp loop_start
+code += b'\x49\x83\xC7\x05' # add r15, 5
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
-# HANDLER: EXIT
-label_exit = len(code)
-# Pop exit code
-# sub r14, 8
-code += b'\x49\x83\xEE\x08'
-# mov rdi, [r14]
-code += b'\x41\x8B\x3E'
-# mov eax, 60
-code += b'\xB8\x3C\x00\x00\x00'
+# HANDLER: PRINT (FIXED JUMPS)
+label_print = len(code)
+# Pop Number
+code += b'\x49\x83\xEE\x08' # sub r14, 8
+code += b'\x41\x8B\x06'     # mov eax, [r14]
+
+# r10 = End of buffer (r14 + 32)
+code += b'\x4D\x8D\x56\x20'
+# mov r11, r10 (Save End)
+code += b'\x4D\x89\xD3'
+# mov byte [r10], 10 (\n)
+code += b'\x41\xC6\x02\x0A'
+# dec r10
+code += b'\x49\xFF\xCA'
+
+# Handle 0
+# test eax, eax
+code += b'\x85\xC0'
+
+# Placeholder for JNZ loop_itoa
+off_jnz_loop_itoa_start = len(code)
+code += b'\x75\x00' # JNZ +0
+
+# Zero case
+code += b'\x41\xC6\x02\x30' # mov byte [r10], '0'
+code += b'\x49\xFF\xCA'     # dec r10
+
+# Placeholder for JMP do_write
+off_jmp_do_write = len(code)
+code += b'\xEB\x00' # JMP +0
+
+# Loop Itoa Start
+label_loop_itoa = len(code)
+# Patch JNZ loop_itoa (at start) to point here
+# JNZ is at off_jnz_loop_itoa_start.
+# Target is label_loop_itoa.
+# Offset = Target - (Pos + 2)
+offset = label_loop_itoa - (off_jnz_loop_itoa_start + 2)
+code_list = bytearray(code)
+code_list[off_jnz_loop_itoa_start + 1] = offset
+code = bytes(code_list)
+
+
+# mov ebx, 10
+code += b'\xBB\x0A\x00\x00\x00'
+# xor edx, edx
+code += b'\x31\xD2'
+# div ebx
+code += b'\xF7\xF3'
+# add dl, '0'
+code += b'\x80\xC2\x30'
+# mov [r10], dl
+code += b'\x41\x88\x12'
+# dec r10
+code += b'\x49\xFF\xCA'
+# test eax, eax
+code += b'\x85\xC0'
+# jnz loop_itoa
+# JNZ back to label_loop_itoa
+offset = label_loop_itoa - (len(code) + 2)
+# Convert negative offset to signed byte
+if offset < 0:
+    offset = 256 + offset
+code += b'\x75' + p8(offset)
+
+# DO WRITE
+label_do_write = len(code)
+# Patch JMP do_write
+offset = label_do_write - (off_jmp_do_write + 2)
+code_list = bytearray(code)
+code_list[off_jmp_do_write + 1] = offset
+code = bytes(code_list)
+
+# inc r10 (Start of string)
+code += b'\x49\xFF\xC2'
+# mov rsi, r10
+code += b'\x4C\x89\xD6'
+# Length calculation: r11 - r10 + 1
+code += b'\x4C\x89\xDA' # mov rdx, r11
+code += b'\x4C\x29\xD2' # sub rdx, r10
+code += b'\x48\xFF\xC2' # inc rdx
+
+# mov edi, 1 (stdout)
+code += b'\xBF\x01\x00\x00\x00'
+# mov eax, 1 (write)
+code += b'\xB8\x01\x00\x00\x00'
 # syscall
 code += b'\x0F\x05'
 
+# Finish PRINT
+# inc r15
+code += b'\x49\xFF\xC7'
+# jmp loop_start
+code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
+
+
+# HANDLER: EXIT
+label_exit = len(code)
+code += b'\x49\x83\xEE\x08' # sub r14, 8
+code += b'\x41\x8B\x3E'     # mov rdi, [r14]
+code += b'\xB8\x3C\x00\x00\x00' # mov eax, 60
+code += b'\x0F\x05'
 
 # ERROR HANDLER
 label_error = len(code)
-# mov rdi, 1
-code += b'\xBF\x01\x00\x00\x00'
-# mov eax, 60
-code += b'\xB8\x3C\x00\x00\x00'
-# syscall
+code += b'\xBF\x01\x00\x00\x00' # mov rdi, 1
+code += b'\xB8\x3C\x00\x00\x00' # mov eax, 60
 code += b'\x0F\x05'
 
 
 # --- Patching Offsets ---
 def patch(data, pos, target_addr_relative):
-    # Target Addr Relative means: Target - (Pos + 4)
     offset = target_addr_relative - (pos + 4)
     return data[:pos] + p32(offset) + data[pos+4:]
 
 def patch_lea(data, pos, target_pos):
-    # LEA is relative to RIP (next instruction)
     offset = target_pos - (pos + 4)
     return data[:pos] + p32(offset) + data[pos+4:]
 
-# Patch Dispatcher Jumps
+# Patch Dispatcher
 code = patch(code, off_je_push, label_push)
 code = patch(code, off_je_pop, label_pop)
 code = patch(code, off_je_add, label_add)
@@ -379,24 +389,21 @@ code = patch(code, off_je_jmp, label_jmp)
 code = patch(code, off_je_jz, label_jz)
 code = patch(code, off_je_eq, label_eq)
 code = patch(code, off_je_dup, label_dup)
+code = patch(code, off_je_print, label_print)
 code = patch(code, off_je_exit, label_exit)
 
-# Patch Error Checks
+# Patch Error
 code = patch(code, off_err_open, label_error)
 code = patch(code, off_err_read, label_error)
 
 # Data Section
 pos_data = len(code)
-filename_str = b"loop_program.bin\x00"
+filename_str = b"print_test.bin\x00"
 code += filename_str
 
 pos_buffer = len(code)
-# Buffer space is technically "after" code.
-# The `pos_buffer` is where the buffer starts in the file image, or just used for calculating VAddr offsets.
-# ELF loads segments. We need to make sure the buffer is in a writable segment.
-# In this simple ELF, we put everything in one RWE segment.
 
-# Patch LEA (Data References)
+# Patch LEA
 code = patch_lea(code, off_filename, pos_data)
 code = patch_lea(code, off_buffer_read, pos_buffer)
 code = patch_lea(code, off_buffer_init, pos_buffer)
@@ -404,23 +411,21 @@ code = patch_lea(code, off_buffer_init, pos_buffer)
 
 # Finalizing ELF
 total_size = 120 + len(code)
-mem_size = total_size + 4096 + 4096 # Code + Buffer + Stack
+mem_size = total_size + 8192 # More stack space
 
-# Build Program Header
 phdr = b''
-phdr += p32(1)                  # Type: LOAD
-phdr += p32(7)                  # Flags: R W E
-phdr += p64(0)                  # Offset
-phdr += p64(0x400000)           # VAddr
-phdr += p64(0x400000)           # PAddr
-phdr += p64(total_size)         # FileSize
-phdr += p64(mem_size)           # MemSize
-phdr += p64(0x1000)             # Align
+phdr += p32(1)
+phdr += p32(7)
+phdr += p64(0)
+phdr += p64(0x400000)
+phdr += p64(0x400000)
+phdr += p64(total_size)
+phdr += p64(mem_size)
+phdr += p64(0x1000)
 
-# Write to file
 with open('morph_vm', 'wb') as f:
     f.write(elf_header)
     f.write(phdr)
     f.write(code)
 
-print(f"VM v0.2 built successfully. Size: {total_size} bytes.")
+print(f"VM v0.3 built successfully. Size: {total_size} bytes.")

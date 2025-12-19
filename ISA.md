@@ -1,4 +1,4 @@
-# MorphAssembly Instruction Set Architecture (ISA) v0.2
+# MorphAssembly Instruction Set Architecture (ISA) v0.3
 
 Dokumen ini mendefinisikan esensi dari mesin virtual MorphAssembly.
 
@@ -11,9 +11,6 @@ Dokumen ini mendefinisikan esensi dari mesin virtual MorphAssembly.
 VM memiliki register internal untuk operasi:
 - `IP` (Instruction Pointer): Menunjuk ke instruksi yang sedang dieksekusi.
 - `SP` (Stack Pointer): Menunjuk ke puncak stack.
-
-### Stack
-- Stack digunakan untuk operasi aritmatika dan penyimpanan sementara.
 
 ## Opcode (Daftar Instruksi)
 
@@ -30,25 +27,8 @@ Setiap instruksi dimulai dengan 1 byte Opcode.
 | `0x06` | **JZ** | 4-byte (Int32) | Pop A. Jika A == 0, Lompat relatif (IP += offset). |
 | `0x07` | **EQ** | - | Pop A, Pop B. Push 1 jika A == B, else 0. |
 | `0x08` | **DUP** | - | Duplikasi nilai teratas stack. |
+| `0x09` | **PRINT**| - | Pop nilai teratas stack, cetak sebagai Angka Desimal ke STDOUT + Newline. |
 | `0xFF` | **EXIT** | - | Hentikan program. Exit Code = Pop Stack. |
 
-## Contoh Program (Loop)
-
-Program hitung mundur 3 ke 0:
-
-```
-PUSH 3
-LABEL_LOOP:
-  DUP         ; Stack: [3, 3]
-  PUSH 0      ; Stack: [3, 3, 0]
-  EQ          ; Stack: [3, 0] (Karena 3 != 0)
-  JZ CONTINUE ; Jika 0 (false), lanjut. Jika 1 (true/equal), kita tidak jump (eh terbalik logika JZ, nanti disesuaikan).
-
-  ; Logika harusnya:
-  ; DUP
-  ; PUSH 0
-  ; EQ
-  ; JNZ EXIT_LOOP (Kalau Equal, keluar)
-  ; ...
-```
-(Detail implementasi di `build_sample.py`)
+## Diagnostik
+Instruksi `PRINT` (0x09) sangat penting untuk debugging. Ia melakukan konversi biner ke teks (itoa) secara internal dan menggunakan syscall `write`.
