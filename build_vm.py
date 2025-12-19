@@ -192,6 +192,21 @@ code += b'\x3C\x0B'
 code += b'\x0F\x84\x00\x00\x00\x00'
 off_je_store = len(code) - 4
 
+# Case 0x0C: OPEN
+code += b'\x3C\x0C'
+code += b'\x0F\x84\x00\x00\x00\x00'
+off_je_open = len(code) - 4
+
+# Case 0x0D: WRITE
+code += b'\x3C\x0D'
+code += b'\x0F\x84\x00\x00\x00\x00'
+off_je_write = len(code) - 4
+
+# Case 0x0E: CLOSE
+code += b'\x3C\x0E'
+code += b'\x0F\x84\x00\x00\x00\x00'
+off_je_close = len(code) - 4
+
 
 # Default: Skip
 # inc r15
@@ -281,34 +296,88 @@ code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 
 # HANDLER: LOAD
-# Pop Address -> Read from Heap[Address] -> Push Value
 label_load = len(code)
-# Pop Address
-code += b'\x49\x83\xEE\x08' # sub r14, 8
-code += b'\x41\x8B\x1E'     # mov ebx, [r14] (Address - assume 32bit offset)
-# Read from Heap [r12 + rbx]
-code += b'\x49\x8B\x04\x1C' # mov rax, [r12 + rbx]
-# Push Value (Overwrite Address on stack)
-code += b'\x49\x89\x06'     # mov [r14], rax
-code += b'\x49\x83\xC6\x08' # add r14, 8
-# Next
-code += b'\x49\xFF\xC7'     # inc r15
+code += b'\x49\x83\xEE\x08'
+code += b'\x41\x8B\x1E'
+code += b'\x49\x8B\x04\x1C'
+code += b'\x49\x89\x06'
+code += b'\x49\x83\xC6\x08'
+code += b'\x49\xFF\xC7'
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 
 # HANDLER: STORE
-# Pop Address, Pop Value -> Heap[Address] = Value
 label_store = len(code)
-# Pop Address
+code += b'\x49\x83\xEE\x08'
+code += b'\x41\x8B\x1E'
+code += b'\x49\x83\xEE\x08'
+code += b'\x49\x8B\x06'
+code += b'\x49\x89\x04\x1C'
+code += b'\x49\xFF\xC7'
+code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
+
+
+# HANDLER: OPEN
+# Pop Mode, Pop PtrFilename -> Push FD
+label_open = len(code)
+# Pop Mode (RSI)
 code += b'\x49\x83\xEE\x08' # sub r14, 8
-code += b'\x41\x8B\x1E'     # mov ebx, [r14]
-# Pop Value
+code += b'\x49\x8B\x36'     # mov rsi, [r14]
+# Map Mode: 0->O_RDONLY(0), 1->O_WRONLY|O_CREAT|O_TRUNC (1|64|512 = 577 = 0x241)
+# Simple Logic: if Mode==1, rsi=0x241, rdx=0644
+# If Mode==0, rsi=0
+# Let's assume user passes raw flags for now? Or Simple?
+# Simple: Check if 1.
+code += b'\x48\x83\xFE\x01' # cmp rsi, 1
+code += b'\x75\x07'         # jne +7
+# Set Write Flags
+code += b'\xBE\x41\x02\x00\x00' # mov esi, 0x241
+code += b'\xBA\xA4\x01\x00\x00' # mov edx, 0644 (for create)
+# Pop Filename Ptr (RDI)
 code += b'\x49\x83\xEE\x08' # sub r14, 8
-code += b'\x49\x8B\x06'     # mov rax, [r14] (Value 64bit)
-# Store to Heap [r12 + rbx]
-code += b'\x49\x89\x04\x1C' # mov [r12 + rbx], rax
+code += b'\x41\x8B\x1E'     # mov ebx, [r14] (Offset)
+code += b'\x49\x8D\x3C\x1C' # lea rdi, [r12 + rbx] (Heap + Offset)
+# Syscall Open
+code += b'\xB8\x02\x00\x00\x00' # mov eax, 2
+code += b'\x0F\x05'
+# Push FD (RAX)
+code += b'\x49\x89\x06'     # mov [r14], rax
+code += b'\x49\x83\xC6\x08' # add r14, 8
 # Next
-code += b'\x49\xFF\xC7'     # inc r15
+code += b'\x49\xFF\xC7'
+code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
+
+
+# HANDLER: WRITE
+# Pop Len, Pop PtrData, Pop FD -> Write
+label_write = len(code)
+# Pop Len (RDX)
+code += b'\x49\x83\xEE\x08'
+code += b'\x49\x8B\x16'     # mov rdx, [r14]
+# Pop PtrData (RSI)
+code += b'\x49\x83\xEE\x08'
+code += b'\x41\x8B\x1E'     # mov ebx, [r14]
+code += b'\x49\x8D\x34\x1C' # lea rsi, [r12 + rbx]
+# Pop FD (RDI)
+code += b'\x49\x83\xEE\x08'
+code += b'\x49\x8B\x3E'     # mov rdi, [r14]
+# Syscall Write
+code += b'\xB8\x01\x00\x00\x00' # mov eax, 1
+code += b'\x0F\x05'
+# Next
+code += b'\x49\xFF\xC7'
+code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
+
+
+# HANDLER: CLOSE
+# Pop FD -> Close
+label_close = len(code)
+code += b'\x49\x83\xEE\x08'
+code += b'\x49\x8B\x3E'     # mov rdi, [r14]
+code += b'\xB8\x03\x00\x00\x00' # mov eax, 3
+code += b'\x0F\x05'
+# Next
+code += b'\x49\xFF\xC7'
 code += b'\xE9' + p32(label_loop_start - (len(code) + 5))
 
 
@@ -394,6 +463,9 @@ code = patch(code, off_je_dup, label_dup)
 code = patch(code, off_je_print, label_print)
 code = patch(code, off_je_load, label_load)
 code = patch(code, off_je_store, label_store)
+code = patch(code, off_je_open, label_open)
+code = patch(code, off_je_write, label_write)
+code = patch(code, off_je_close, label_close)
 code = patch(code, off_je_exit, label_exit)
 
 # Patch Error
@@ -402,7 +474,7 @@ code = patch(code, off_err_read, label_error)
 
 # Data Section
 pos_data = len(code)
-filename_str = b"memory_swap_test.bin\x00"
+filename_str = b"storage_test.bin\x00"
 code += filename_str
 
 pos_buffer = len(code)
@@ -433,4 +505,4 @@ with open('morph_vm', 'wb') as f:
     f.write(phdr)
     f.write(code)
 
-print(f"VM v0.4 built successfully. Size: {total_size} bytes.")
+print(f"VM v0.5 built successfully. Size: {total_size} bytes.")
