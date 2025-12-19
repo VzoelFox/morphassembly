@@ -1,53 +1,49 @@
 # MorphAssembly
 
-MorphAssembly adalah proyek eksperimental untuk membangun **Virtual Machine (VM)** agnostik sistem secara bertahap, dimulai dari level terendah (pure binary/hex).
+MorphAssembly adalah proyek eksperimental untuk membangun **Virtual Machine (VM)** agnostik sistem.
+Versi ini (v0.6 C-Rewrite) telah ditulis ulang sepenuhnya menggunakan **C Standar** untuk stabilitas dan kemudahan pengembangan, menggantikan metode "Assembly Manual" berbasis Python sebelumnya.
 
 ## Filosofi
-Proyek ini mematuhi prinsip "Tanpa Jalan Pintas".
-- VM awal dibangun dengan menulis kode mesin x86_64 secara manual (tanpa compiler C/C++/Rust).
-- Setiap instruksi didefinisikan secara eksplisit.
-- Mengutamakan kejujuran dalam kapabilitas ("jangan bilang bisa jika tidak bisa").
+- **Kejujuran Teknis**: VM mensimulasikan memori, stack, dan register secara eksplisit dalam kode C.
+- **Portabilitas**: Dapat dikompilasi di sistem manapun yang memiliki compiler C (GCC/Clang) dan standar POSIX (untuk File I/O).
 
 ## Struktur Proyek
-- `ISA.md`: Definisi Instruction Set Architecture (Opcode & Logika).
-- `build_vm.py`: Script Python yang berfungsi sebagai "Assembler Manual" untuk menghasilkan executable VM (`morph_vm`) dari kode hex mentah.
-- `build_sample.py`: Script untuk membuat program contoh MorphAssembly (Bytecode).
-
-## Fitur Utama (v0.4)
-- **Core**: Stack-based architecture dengan register internal minimal.
-- **Compute**: Aritmatika (`ADD`, `SUB`), Logika (`EQ`), Stack (`PUSH`, `POP`, `DUP`).
-- **Flow Control**: `JMP`, `JZ` (Conditional Branching).
-- **IO**: `PRINT` (Mencetak angka desimal ke STDOUT).
-- **Memory**: Linear Memory Model (`LOAD`, `STORE`) untuk manipulasi data (RAM).
+- `morph_vm.c`: Source code utama Virtual Machine. Mengimplementasikan siklus Fetch-Decode-Execute dan manajemen memori.
+- `gen_test.c`: Program utilitas untuk menghasilkan file bytecode biner (`read_write_test.bin`) sebagai contoh.
+- `ISA.md`: Definisi Instruction Set Architecture.
 
 ## Cara Menggunakan
 
-### 1. Build VM
-VM dibangun langsung dari definisi Python ke ELF64 Binary.
+### 1. Build VM dan Generator
+Gunakan GCC untuk mengompilasi source code.
 ```bash
-python3 build_vm.py
-chmod +x morph_vm
+gcc -o morph_vm morph_vm.c
+gcc -o gen_test gen_test.c
 ```
 
 ### 2. Buat Program Contoh
-Saat ini, script dikonfigurasi untuk membuat tes manipulasi memori (`memory_swap_test.bin`).
+Jalankan generator untuk membuat file biner `read_write_test.bin`.
 ```bash
-python3 build_sample.py
+./gen_test
+```
+*Note: Program ini akan mencoba membaca file `output.txt`, jadi pastikan file tersebut ada.*
+```bash
+echo "Hello World" > output.txt
 ```
 
-### 3. Jalankan
-Jalankan VM. VM akan otomatis mencari `memory_swap_test.bin` di direktori yang sama.
+### 3. Jalankan VM
+Jalankan VM dengan memberikan file biner sebagai argumen.
 ```bash
-./morph_vm
-```
-**Output yang diharapkan (Memory Test):**
-```
-222  (Overwrite Test)
-20   (Swap Result A)
-10   (Swap Result B)
-0    (Zeroing Test)
+./morph_vm read_write_test.bin
 ```
 
-## Status Saat Ini (v0.4)
-- **Linear Memory**: VM memiliki akses ke area Heap (64KB) untuk menyimpan variabel.
-- **Robustness**: Error handling untuk file tidak ditemukan, dan perbaikan logika jump offset dinamis.
+**Output yang diharapkan:**
+```
+10      (Jumlah byte yang berhasil dibaca dari permintaan 10 byte)
+Hello   (6 byte pertama dari buffer yang ditulis ke stdout)
+```
+
+## Arsitektur (v0.6)
+- **Memory**: Linear Memory (Code + Stack + Heap).
+- **Stack**: Ascending Stack (Tumbuh ke atas / alamat lebih tinggi).
+- **IO**: Mendukung `OPEN`, `READ`, `WRITE`, `CLOSE` (POSIX wrapper), dan `PRINT` (Stdout).
