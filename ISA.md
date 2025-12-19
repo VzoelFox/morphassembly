@@ -1,4 +1,4 @@
-# MorphAssembly Instruction Set Architecture (ISA) v0.5
+# MorphAssembly Instruction Set Architecture (ISA) v0.6
 
 Dokumen ini mendefinisikan esensi dari mesin virtual MorphAssembly.
 
@@ -34,8 +34,10 @@ Setiap instruksi dimulai dengan 1 byte Opcode.
 | `0x0C` | **OPEN** | - | Pop Mode, Pop Ptr Filename. Buka File. Push FD. |
 | `0x0D` | **WRITE**| - | Pop Length, Pop Ptr Data, Pop FD. Tulis ke File. |
 | `0x0E` | **CLOSE**| - | Pop FD. Tutup File. |
+| `0x0F` | **READ** | - | Pop Length, Pop Ptr Buffer, Pop FD. Baca File. Push ReadCount. |
 | `0xFF` | **EXIT** | - | Hentikan program. Exit Code = Pop Stack. |
 
 ## Detail IO File
-- **OPEN**: Mode 0 = Read Only, Mode 1 = Write Only (Create/Truncate), Mode 2 = Read/Write.
-- **WRITE**: Data diambil dari Heap (relatif terhadap HP).
+- **OPEN**: Mode 0 = Read Only, Mode 1 = Write Only (Create/Truncate).
+- **READ**: Membaca dari FD ke Buffer (Heap). Mendorong jumlah byte yang berhasil dibaca ke Stack.
+- **WRITE**: Menulis dari Buffer (Heap) ke FD.
