@@ -35,6 +35,7 @@ Setiap instruksi dimulai dengan 1 byte Opcode.
 | `0x0D` | **WRITE**| - | Pop Length, Pop Ptr Data, Pop FD. Tulis ke File. |
 | `0x0E` | **CLOSE**| - | Pop FD. Tutup File. |
 | `0x0F` | **READ** | - | Pop Length, Pop Ptr Buffer, Pop FD. Baca File. Push ReadCount. |
+| `0x10` | **BREAK**| - | Pause eksekusi dan masuk ke Debugger Mode (jika aktif). |
 | `0xFF` | **EXIT** | - | Hentikan program. Exit Code = Pop Stack. |
 
 ## Detail IO File
