@@ -18,12 +18,16 @@
 #define OP_PRINT  0x09
 #define OP_LOAD   0x0A
 #define OP_STORE  0x0B
-#define OP_OPEN   0x0C
-#define OP_WRITE  0x0D
-#define OP_CLOSE  0x0E
-#define OP_READ   0x0F
 #define OP_BREAK  0x10
-#define OP_EXIT   0xFF
+#define OP_SYSCALL 0x11
+
+// Syscall IDs
+#define SYS_EXIT  0
+#define SYS_OPEN  1
+#define SYS_CLOSE 2
+#define SYS_READ  3
+#define SYS_WRITE 4
+#define SYS_SBRK  5
 
 FILE *f;
 
@@ -54,7 +58,15 @@ int main() {
     f = fopen("test.bin", "wb");
     if (!f) return 1;
 
-    printf("Generating I/O Test...\n");
+    printf("Generating Syscall I/O Test...\n");
+
+    // 0. SBRK: Allocate 256 bytes for our strings
+    // Stack: [Increment] -> SBRK -> Push OldBreak
+    emit_u8(OP_PUSH); emit_u64(256);
+    emit_u8(OP_PUSH); emit_u64(SYS_SBRK);
+    emit_u8(OP_SYSCALL);
+    // Stack: [OldBreak (0)]
+    emit_u8(OP_POP); // Discard old break for this simple test
 
     // 1. Prepare Filename "data.txt" at Heap[0]
     emit_string_to_heap(0, "data.txt");
@@ -62,14 +74,12 @@ int main() {
     // 2. Prepare Content "Morph" at Heap[64]
     emit_string_to_heap(64, "Morph");
 
-    // DEBUG TEST: BREAK BEFORE I/O
-    emit_u8(OP_BREAK);
-
     // 3. OPEN "data.txt" for Write (Mode 1)
     // Stack: [Ptr, Mode] -> OPEN -> Push FD
     emit_u8(OP_PUSH); emit_u64(0); // Ptr to filename
     emit_u8(OP_PUSH); emit_u64(1); // Mode 1 (Write)
-    emit_u8(OP_OPEN);
+    emit_u8(OP_PUSH); emit_u64(SYS_OPEN);
+    emit_u8(OP_SYSCALL);
 
     // Stack: [FD]
 
@@ -77,28 +87,28 @@ int main() {
     emit_u8(OP_DUP);                // Stack: [FD, FD]
     emit_u8(OP_PUSH); emit_u64(64); // PtrData ("Morph")
     emit_u8(OP_PUSH); emit_u64(5);  // Len ("Morph")
-    emit_u8(OP_WRITE);              // Pops Len, Ptr, FD. Stack: [FD]
+    emit_u8(OP_PUSH); emit_u64(SYS_WRITE);
+    emit_u8(OP_SYSCALL);            // Stack: [FD]
 
     // 5. CLOSE File
     // Stack: [FD] -> CLOSE -> Stack: []
-    emit_u8(OP_CLOSE);
+    emit_u8(OP_PUSH); emit_u64(SYS_CLOSE);
+    emit_u8(OP_SYSCALL);
 
     // 6. OPEN "data.txt" for Read (Mode 0)
     emit_u8(OP_PUSH); emit_u64(0); // Ptr
     emit_u8(OP_PUSH); emit_u64(0); // Mode 0 (Read)
-    emit_u8(OP_OPEN);
+    emit_u8(OP_PUSH); emit_u64(SYS_OPEN);
+    emit_u8(OP_SYSCALL);
     // Stack: [FD]
 
     // 7. READ into Heap[128]
     // Stack: [FD]
-    // We need [FD, Ptr, Len]
-    // READ pops: [Len, PtrBuffer, FD].
-    // So stack order: [FD, Ptr, Len] (Top)
     emit_u8(OP_DUP); // Keep FD for close? Yes. Stack: [FD, FD]
     emit_u8(OP_PUSH); emit_u64(128); // Ptr Buffer
     emit_u8(OP_PUSH); emit_u64(5);   // Len
-    emit_u8(OP_READ);
-    // VM: READ pops Len, Ptr, FD. Performs read. Pushes ReadCount.
+    emit_u8(OP_PUSH); emit_u64(SYS_READ);
+    emit_u8(OP_SYSCALL);
     // Stack: [FD, ReadCount]
 
     // 8. Print ReadCount (Should be 5)
@@ -106,19 +116,19 @@ int main() {
     // Stack: [FD]
 
     // 9. CLOSE File
-    emit_u8(OP_CLOSE);
+    emit_u8(OP_PUSH); emit_u64(SYS_CLOSE);
+    emit_u8(OP_SYSCALL);
     // Stack: []
 
     // 10. Verify Data: Print data at Heap[128]
-    // Note: LOAD reads 64-bit integer. "Morph" (5 bytes) + nulls will be read as a large integer.
     emit_u8(OP_PUSH); emit_u64(128); // Addr
     emit_u8(OP_LOAD);
-    // Stack: [Integer representation of "Morph..."]
     emit_u8(OP_PRINT);
 
     // 11. Exit
-    emit_u8(OP_PUSH); emit_u64(0);
-    emit_u8(OP_EXIT);
+    emit_u8(OP_PUSH); emit_u64(0); // Exit Code
+    emit_u8(OP_PUSH); emit_u64(SYS_EXIT);
+    emit_u8(OP_SYSCALL);
 
     fclose(f);
     printf("Generated test.bin\n");

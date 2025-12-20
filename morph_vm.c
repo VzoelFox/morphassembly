@@ -10,7 +10,6 @@
 // MorphAssembly VM v0.6
 
 #define STACK_SIZE 1024
-#define HEAP_SIZE 65536 // 64KB
 
 // Opcode Definitions
 #define OP_NOP    0x00
@@ -25,12 +24,16 @@
 #define OP_PRINT  0x09
 #define OP_LOAD   0x0A
 #define OP_STORE  0x0B
-#define OP_OPEN   0x0C
-#define OP_WRITE  0x0D
-#define OP_CLOSE  0x0E
-#define OP_READ   0x0F
 #define OP_BREAK  0x10
-#define OP_EXIT   0xFF
+#define OP_SYSCALL 0x11
+
+// Syscall IDs
+#define SYS_EXIT  0
+#define SYS_OPEN  1
+#define SYS_CLOSE 2
+#define SYS_READ  3
+#define SYS_WRITE 4
+#define SYS_SBRK  5
 
 // VM State
 typedef struct {
@@ -41,7 +44,8 @@ typedef struct {
     uint64_t stack[STACK_SIZE];
     uint64_t sp; // Stack Pointer (index of next empty slot)
 
-    uint8_t heap[HEAP_SIZE];
+    uint8_t *heap;
+    size_t heap_capacity;
 } VM;
 
 VM vm;
@@ -96,7 +100,7 @@ void debug_shell() {
             uint64_t addr = 0;
             int len = 16;
             sscanf(cmd + 1, "%lu %d", &addr, &len);
-            if (addr + len > HEAP_SIZE) len = HEAP_SIZE - addr;
+            if (addr + len > vm.heap_capacity) len = vm.heap_capacity - addr;
 
             printf("Memory [%lu..%lu]:\n", addr, addr+len);
             for (int i = 0; i < len; i++) {
@@ -141,7 +145,8 @@ int main(int argc, char *argv[]) {
     // Init VM
     vm.ip = 0;
     vm.sp = 0;
-    memset(vm.heap, 0, HEAP_SIZE);
+    vm.heap = NULL;
+    vm.heap_capacity = 0;
 
     // Execution Loop
     while (vm.ip < vm.code_size) {
@@ -177,7 +182,7 @@ int main(int argc, char *argv[]) {
             case OP_SUB: {
                 uint64_t b = pop();
                 uint64_t a = pop();
-                push(a - b); // Note: Order matters. Pop B then A means A was pushed first. Stack: [A, B(top)]. Sub: A - B.
+                push(a - b);
                 break;
             }
             case OP_JMP: {
@@ -215,7 +220,7 @@ int main(int argc, char *argv[]) {
                 break;
             case OP_LOAD: {
                 uint64_t addr = pop();
-                if (addr > HEAP_SIZE - 8) error("Heap Out of Bounds (LOAD)");
+                if (vm.heap_capacity < 8 || addr > vm.heap_capacity - 8) error("Heap Out of Bounds (LOAD)");
 
                 uint64_t val = 0;
                 for(int i=0; i<8; i++) {
@@ -227,54 +232,10 @@ int main(int argc, char *argv[]) {
             case OP_STORE: {
                 uint64_t addr = pop();
                 uint64_t val = pop();
-                if (addr > HEAP_SIZE - 8) error("Heap Out of Bounds (STORE)");
+                if (vm.heap_capacity < 8 || addr > vm.heap_capacity - 8) error("Heap Out of Bounds (STORE)");
                 for(int i=0; i<8; i++) {
                     vm.heap[addr + i] = (val >> (i*8)) & 0xFF;
                 }
-                break;
-            }
-            case OP_OPEN: {
-                uint64_t mode = pop();
-                uint64_t ptr = pop();
-                if (ptr >= HEAP_SIZE) error("Heap Ptr Out of Bounds");
-                // Check if string is null-terminated within bounds
-                bool safe = false;
-                for (size_t i = ptr; i < HEAP_SIZE; i++) {
-                    if (vm.heap[i] == '\0') {
-                        safe = true;
-                        break;
-                    }
-                }
-                if (!safe) error("String not null-terminated or out of bounds");
-
-                char *filename = (char*)&vm.heap[ptr];
-                // basic security check?
-                int flags = (mode == 1) ? (O_WRONLY | O_CREAT | O_TRUNC) : O_RDONLY;
-                int fd = open(filename, flags, 0644);
-                push((uint64_t)fd); // If fd is -1, it will be pushed as huge unsigned, that's fine for now.
-                break;
-            }
-            case OP_WRITE: {
-                uint64_t len = pop();
-                uint64_t ptr = pop();
-                uint64_t fd = pop();
-                if (ptr > HEAP_SIZE || len > HEAP_SIZE || ptr + len > HEAP_SIZE) error("Heap Buffer Out of Bounds");
-                ssize_t written = write((int)fd, &vm.heap[ptr], len);
-                // ISA doesn't say Push result for WRITE, but usually good practice. ISA says "Tulis ke File". No push mentioned.
-                break;
-            }
-            case OP_CLOSE: {
-                uint64_t fd = pop();
-                close((int)fd);
-                break;
-            }
-            case OP_READ: {
-                uint64_t len = pop();
-                uint64_t ptr = pop();
-                uint64_t fd = pop();
-                if (ptr > HEAP_SIZE || len > HEAP_SIZE || ptr + len > HEAP_SIZE) error("Heap Buffer Out of Bounds");
-                ssize_t n = read((int)fd, &vm.heap[ptr], len);
-                push((uint64_t)n);
                 break;
             }
             case OP_BREAK: {
@@ -284,9 +245,74 @@ int main(int argc, char *argv[]) {
                 }
                 break;
             }
-            case OP_EXIT: {
-                uint64_t code = pop();
-                exit((int)code);
+            case OP_SYSCALL: {
+                uint64_t id = pop();
+                switch (id) {
+                    case SYS_EXIT: {
+                        uint64_t code = pop();
+                        exit((int)code);
+                        break;
+                    }
+                    case SYS_OPEN: {
+                        uint64_t mode = pop();
+                        uint64_t ptr = pop();
+                        if (ptr >= vm.heap_capacity) error("Heap Ptr Out of Bounds");
+                        // Scan for null terminator
+                        bool safe = false;
+                        for (size_t i = ptr; i < vm.heap_capacity; i++) {
+                            if (vm.heap[i] == '\0') {
+                                safe = true;
+                                break;
+                            }
+                        }
+                        if (!safe) error("String not null-terminated or out of bounds");
+                        char *filename = (char*)&vm.heap[ptr];
+                        int flags = (mode == 1) ? (O_WRONLY | O_CREAT | O_TRUNC) : O_RDONLY;
+                        int fd = open(filename, flags, 0644);
+                        push((uint64_t)fd);
+                        break;
+                    }
+                    case SYS_CLOSE: {
+                        uint64_t fd = pop();
+                        close((int)fd);
+                        break;
+                    }
+                    case SYS_READ: {
+                        uint64_t len = pop();
+                        uint64_t ptr = pop();
+                        uint64_t fd = pop();
+                        if (ptr > vm.heap_capacity || len > vm.heap_capacity || ptr + len > vm.heap_capacity) error("Heap Buffer Out of Bounds");
+                        ssize_t n = read((int)fd, &vm.heap[ptr], len);
+                        push((uint64_t)n);
+                        break;
+                    }
+                    case SYS_WRITE: {
+                        uint64_t len = pop();
+                        uint64_t ptr = pop();
+                        uint64_t fd = pop();
+                        if (ptr > vm.heap_capacity || len > vm.heap_capacity || ptr + len > vm.heap_capacity) error("Heap Buffer Out of Bounds");
+                        write((int)fd, &vm.heap[ptr], len);
+                        break;
+                    }
+                    case SYS_SBRK: {
+                        uint64_t increment = pop();
+                        uint64_t old_break = vm.heap_capacity;
+                        size_t new_size = vm.heap_capacity + increment;
+                        uint8_t *new_heap = realloc(vm.heap, new_size);
+                        if (!new_heap) error("SBRK Memory Allocation Failed");
+
+                        // Initialize new memory to 0
+                        memset(new_heap + vm.heap_capacity, 0, increment);
+
+                        vm.heap = new_heap;
+                        vm.heap_capacity = new_size;
+                        push(old_break);
+                        break;
+                    }
+                    default:
+                        printf("Unknown Syscall ID: %lu\n", id);
+                        exit(1);
+                }
                 break;
             }
             default:
@@ -296,5 +322,6 @@ int main(int argc, char *argv[]) {
     }
 
     free(vm.code);
+    if (vm.heap) free(vm.heap);
     return 0;
 }
