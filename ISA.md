@@ -11,7 +11,7 @@ Dokumen ini mendefinisikan esensi dari mesin virtual MorphAssembly.
 VM memiliki register internal untuk operasi:
 - `IP` (Instruction Pointer): Menunjuk ke instruksi yang sedang dieksekusi.
 - `SP` (Stack Pointer): Menunjuk ke puncak stack.
-- `HP` (Heap Pointer / Base): Alamat awal memori data (Linear Memory).
+- `HP` (Heap Pointer / Base): Alamat awal memori data (Dynamic Linear Memory).
 
 ## Opcode (Daftar Instruksi)
 
@@ -31,13 +31,22 @@ Setiap instruksi dimulai dengan 1 byte Opcode.
 | `0x09` | **PRINT**| - | Pop nilai teratas stack, cetak sebagai Angka Desimal. |
 | `0x0A` | **LOAD** | - | Pop Alamat. Push nilai dari [HP + Alamat]. |
 | `0x0B` | **STORE**| - | Pop Alamat, Pop Nilai. Simpan Nilai ke [HP + Alamat]. |
-| `0x0C` | **OPEN** | - | Pop Mode, Pop Ptr Filename. Buka File. Push FD. |
-| `0x0D` | **WRITE**| - | Pop Length, Pop Ptr Data, Pop FD. Tulis ke File. |
-| `0x0E` | **CLOSE**| - | Pop FD. Tutup File. |
-| `0x0F` | **READ** | - | Pop Length, Pop Ptr Buffer, Pop FD. Baca File. Push ReadCount. |
-| `0xFF` | **EXIT** | - | Hentikan program. Exit Code = Pop Stack. |
+| `0x10` | **BREAK**| - | Pause eksekusi dan masuk ke Debugger Mode (jika aktif). |
+| `0x11` | **SYSCALL**| - | Pop ID, Jalankan System Call. |
+| `0x20` | **SPAWN** | - | Pop Address. Spawn new Context at Address. |
+| `0x21` | **YIELD** | - | Serahkan sisa time-slice ke Context lain (Cooperative Multitasking). |
+| `0x22` | **JOIN**  | - | Menunggu Context lain selesai (Belum diimplementasikan penuh). |
 
-## Detail IO File
-- **OPEN**: Mode 0 = Read Only, Mode 1 = Write Only (Create/Truncate).
-- **READ**: Membaca dari FD ke Buffer (Heap). Mendorong jumlah byte yang berhasil dibaca ke Stack.
-- **WRITE**: Menulis dari Buffer (Heap) ke FD.
+## System Calls (SYSCALL)
+
+Argumen diambil dari Stack (Pop) sesuai urutan yang dibutuhkan.
+*Catatan: Stack LIFO, jadi push argumen terakhir terlebih dahulu.*
+
+| ID | Nama | Argumen (Top of Stack -> Bottom) | Deskripsi |
+| :--- | :--- | :--- | :--- |
+| `0` | **EXIT** | `Code` | Keluar program dengan Exit Code. |
+| `1` | **OPEN** | `Mode`, `PtrFilename` | Buka file. Push FD ke Stack. |
+| `2` | **CLOSE**| `FD` | Tutup file descriptor. |
+| `3` | **READ** | `Len`, `PtrBuffer`, `FD` | Baca file. Push BytesRead ke Stack. |
+| `4` | **WRITE**| `Len`, `PtrData`, `FD` | Tulis ke file. |
+| `5` | **SBRK** | `Increment` | Tambah ukuran Heap sebesar `Increment` bytes. Push alamat awal area baru (Old Break). |
