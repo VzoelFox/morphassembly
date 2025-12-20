@@ -1,4 +1,4 @@
-# MorphAssembly
+# MorphAssembly (Versi C)
 
 MorphAssembly adalah proyek eksperimental untuk membangun **Virtual Machine (VM)** agnostik sistem.
 Versi ini (v0.6 C-Rewrite) telah ditulis ulang sepenuhnya menggunakan **C Standar** untuk stabilitas dan kemudahan pengembangan, menggantikan metode "Assembly Manual" berbasis Python sebelumnya.
@@ -12,7 +12,9 @@ Versi ini (v0.6 C-Rewrite) telah ditulis ulang sepenuhnya menggunakan **C Standa
 - `gen_test.c`: Program utilitas untuk menghasilkan file bytecode biner (`read_write_test.bin`) sebagai contoh.
 - `ISA.md`: Definisi Instruction Set Architecture.
 
-## Cara Menggunakan
+## Cara Kompilasi dan Menjalankan
+
+### 1. Kompilasi VM dan Generator
 
 ### 1. Build VM dan Generator
 Gunakan GCC untuk mengompilasi source code.
