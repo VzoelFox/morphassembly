@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include "sha256.h"
 
 // MorphAssembly VM v0.6
 
@@ -68,6 +69,125 @@ typedef struct {
 VM vm;
 bool debug_mode = false;
 bool step_mode = false;
+
+void crash_report(const char *reason, const char *detail) {
+    fprintf(stderr, "\n[KEGAGALAN KRITIS] Pengecekan Integritas Gagal!\n");
+    fprintf(stderr, "Alasan: %s\n", reason);
+    if (detail) fprintf(stderr, "Detail: %s\n", detail);
+    fprintf(stderr, "Sistem dihentikan demi menjaga kejujuran.\n");
+    exit(1);
+}
+
+void verify_integrity(const char *bin_filename) {
+    // 1. Baca Manifest
+    FILE *f_chk = fopen("integrity.chk", "rb");
+    if (!f_chk) crash_report("Manifest Hilang", "File 'integrity.chk' tidak ditemukan.");
+
+    uint8_t expected_src_hash[32];
+    uint8_t expected_bin_hash[32];
+    if (fread(expected_src_hash, 1, 32, f_chk) != 32) crash_report("Manifest Rusak", "Gagal membaca Hash Source");
+    if (fread(expected_bin_hash, 1, 32, f_chk) != 32) crash_report("Manifest Rusak", "Gagal membaca Hash Binary");
+    fclose(f_chk);
+
+    // 2. Verifikasi Source Code (morph_vm.c)
+    FILE *f_src = fopen("morph_vm.c", "rb");
+    if (!f_src) crash_report("Source Hilang", "File 'morph_vm.c' harus ada untuk pemeriksaan kejujuran.");
+
+    SHA256_CTX ctx;
+    uint8_t buffer[1024];
+    size_t bytes;
+    uint8_t actual_src_hash[32];
+
+    sha256_init(&ctx);
+    while ((bytes = fread(buffer, 1, sizeof(buffer), f_src)) > 0) sha256_update(&ctx, buffer, bytes);
+    sha256_final(&ctx, actual_src_hash);
+    fclose(f_src);
+
+    if (memcmp(expected_src_hash, actual_src_hash, 32) != 0) {
+        crash_report("Pelanggaran Integritas Source Code", "File 'morph_vm.c' telah dimodifikasi!");
+    }
+
+    // 3. Verifikasi File Binary
+    FILE *f_bin = fopen(bin_filename, "rb");
+    if (!f_bin) crash_report("Binary Hilang", bin_filename);
+
+    uint8_t actual_bin_hash[32];
+    sha256_init(&ctx);
+    while ((bytes = fread(buffer, 1, sizeof(buffer), f_bin)) > 0) sha256_update(&ctx, buffer, bytes);
+    sha256_final(&ctx, actual_bin_hash);
+    fclose(f_bin);
+
+    if (memcmp(expected_bin_hash, actual_bin_hash, 32) != 0) {
+        crash_report("Pelanggaran Integritas Binary", "Bytecode yang dieksekusi berbeda dengan manifest!");
+    }
+
+    printf("[Sistem] Integritas Terverifikasi. Sesi Dipercaya.\n");
+}
+
+void verify_bytecode() {
+    uint64_t ip = 8; // Start after Header
+    while (ip < vm.code_size) {
+        uint8_t opcode = vm.code[ip];
+        uint64_t next_ip = ip + 1;
+
+        switch (opcode) {
+            case OP_NOP:
+            case OP_POP:
+            case OP_ADD:
+            case OP_SUB:
+            case OP_EQ:
+            case OP_DUP:
+            case OP_PRINT:
+            case OP_LOAD:
+            case OP_STORE:
+            case OP_BREAK:
+            case OP_SYSCALL:
+            case OP_SPAWN:
+            case OP_YIELD:
+            case OP_JOIN:
+                // 1 byte instruction
+                ip = next_ip;
+                break;
+
+            case OP_PUSH:
+                // 1 byte opcode + 8 bytes operand
+                if (ip + 9 > vm.code_size) crash_report("Bytecode Tidak Valid", "Instruksi PUSH terpotong");
+                ip += 9;
+                break;
+
+            case OP_JMP:
+            case OP_JZ:
+                // 1 byte opcode + 4 bytes operand
+                if (ip + 5 > vm.code_size) crash_report("Bytecode Tidak Valid", "Instruksi JUMP terpotong");
+
+                // Static Jump Analysis
+                int32_t offset = 0;
+                // Operand starts at ip + 1
+                for (int i = 0; i < 4; i++) offset |= ((uint32_t)vm.code[ip + 1 + i]) << (i * 8);
+
+                // VM logic: ctx->ip += offset.
+                // ctx->ip when adding offset is pointing to AFTER the jump instruction (ip + 5).
+                // So target = (ip + 5) + offset.
+                int64_t target = (int64_t)(ip + 5) + offset;
+
+                if (target < 8 || target >= (int64_t)vm.code_size) {
+                    char msg[100];
+                    sprintf(msg, "Target Lompatan Invalid: %ld (IP: %lu)", target, ip);
+                    crash_report("Bytecode Tidak Valid", msg);
+                }
+
+                ip += 5;
+                break;
+
+            default:
+                {
+                    char msg[100];
+                    sprintf(msg, "Opcode Tidak Dikenal: 0x%02X di %lu", opcode, ip);
+                    crash_report("Bytecode Tidak Valid", msg);
+                }
+        }
+    }
+}
 
 void error(const char *msg) {
     fprintf(stderr, "Error [Ctx %d]: %s\n", vm.current_context_id, msg);
@@ -174,6 +294,10 @@ int main(int argc, char *argv[]) {
         filename = argv[1];
     }
 
+    // --- INTEGRITY CHECK START ---
+    verify_integrity(filename);
+    // --- INTEGRITY CHECK END ---
+
     FILE *f = fopen(filename, "rb");
     if (!f) error("Could not open file");
     fseek(f, 0, SEEK_END);
@@ -184,6 +308,26 @@ int main(int argc, char *argv[]) {
     if (fread(vm.code, 1, vm.code_size, f) != vm.code_size) error("Read failed");
     fclose(f);
 
+    // Verify Header (Magic & Version)
+    if (vm.code_size < 8) crash_report("Binary Tidak Valid", "File terlalu kecil untuk header");
+    uint32_t magic = 0;
+    // Read Little Endian from byte array
+    magic |= (uint32_t)vm.code[0];
+    magic |= ((uint32_t)vm.code[1]) << 8;
+    magic |= ((uint32_t)vm.code[2]) << 16;
+    magic |= ((uint32_t)vm.code[3]) << 24;
+
+    if (magic != 0x4D4F5250) {
+        char msg[100];
+        sprintf(msg, "Magic Number Salah. Ditemukan: %08X", magic);
+        crash_report("Format Binary Tidak Valid", msg);
+    }
+    if (vm.code[4] != 0x01) crash_report("Versi Binary Tidak Valid", "Diharapkan v1");
+
+    // --- STATIC ANALYSIS START ---
+    verify_bytecode();
+    // --- STATIC ANALYSIS END ---
+
     // Init Global State
     vm.heap = NULL;
     vm.heap_capacity = 0;
@@ -191,7 +335,7 @@ int main(int argc, char *argv[]) {
     // Init Main Context (ID 0)
     for (int i=0; i<MAX_CONTEXTS; i++) vm.contexts[i].active = false;
     vm.contexts[0].active = true;
-    vm.contexts[0].ip = 0;
+    vm.contexts[0].ip = 8; // Start after Header
     vm.contexts[0].sp = 0;
     vm.current_context_id = 0;
     vm.active_count = 1;

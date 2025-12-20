@@ -45,32 +45,52 @@ int main() {
     f = fopen("test.bin", "wb");
     if (!f) return 1;
 
-    printf("Generating Concurrency Test...\n");
+    printf("Generating Concurrency Test with Header...\n");
+
+    // --- Header ---
+    // Magic: "MORP" (0x4D4F5250)
+    // Version: 0x01
+    // Padding/Reserved: 3 bytes
+    uint32_t magic = 0x4D4F5250;
+    fwrite(&magic, 4, 1, f);
+    emit_u8(0x01); // Version
+    emit_u8(0x00); // Reserved
+    emit_u8(0x00); // Reserved
+    emit_u8(0x00); // Reserved
+    // Total Header Size = 8 bytes.
+    // Code starts at offset 8.
 
     // Strategy:
     // 1. Jump to Main
-    // 2. Define Worker Function (at some offset)
+    // 2. Define Worker Function
     // 3. Main Function
 
-    // --- Header: Jump to Main ---
-    emit_u8(OP_JMP);
-    // Offset will be calculated: Worker is approx 20 bytes?
-    // Let's assume Worker starts at byte 5 (after JMP+Offset)
-    // Worker size:
-    // PUSH 888 -> 9 bytes
-    // PRINT -> 1 byte
-    // YIELD -> 1 byte
-    // PUSH 999 -> 9 bytes
-    // PRINT -> 1 byte
-    // EXIT -> ? (Implicitly handled by loop or SYS_EXIT)
-    // Let's say Worker is at offset 5.
-    // Worker Body Length: 27 bytes (Calculated: 9+1+1+9+1+1+5).
-    // So Jump Target should be 5 + 27 = 32.
-    // VM IP logic: IP is at 5 when executing jump. Target = 5 + offset.
-    // 32 = 5 + offset -> offset = 27.
-    emit_u32(27);
+    // Offset math:
+    // Current file pos = 8.
+    // Instruction: JMP (1) + Offset (4) = 5 bytes.
+    // Next instruction (Worker) starts at 8 + 5 = 13.
 
-    // --- Worker Function (Address: 5) ---
+    // Worker logic same as before.
+    // Worker Body:
+    // PUSH 888 (9) + PRINT (1) = 10
+    // YIELD (1)
+    // PUSH 999 (9) + PRINT (1) = 10
+    // YIELD (1) + JMP (1) + Offset(-6) (4) = 6
+    // Total Worker Size = 10 + 1 + 10 + 6 = 27 bytes.
+
+    // Worker starts at 13. Ends at 13 + 27 = 40.
+    // Main starts at 40.
+
+    // JMP at 8 wants to go to 40.
+    // JMP is at 8. IP after JMP read (opcode+operand) is 8 + 1 + 4 = 13.
+    // Target 40.
+    // Offset = 40 - 13 = 27.
+
+    // --- JMP to Main ---
+    emit_u8(OP_JMP);
+    emit_u32(27); // Jump over Worker to Main
+
+    // --- Worker Function (Address: 13) ---
     // Print 888 (Worker 1)
     emit_u8(OP_PUSH); emit_u64(888);
     emit_u8(OP_PRINT);
@@ -82,36 +102,12 @@ int main() {
     emit_u8(OP_PUSH); emit_u64(999);
     emit_u8(OP_PRINT);
 
-    // Exit Context (Using SYS_EXIT logic or custom logic?)
-    // In our VM, if code runs out, it exits context.
-    // Let's just end here. (Or loop forever to be safe? No, let's test implicit exit)
-    // But we need to make sure we don't fall through to Main if we were placed differently.
-    // Since we are at Address 5, and Main is at 35 + 5 = 40, we are safe if we stop.
-    // To be explicit, let's just JMP to self or something.
-    // Actually, VM stops context if ip >= code_size. But we are in middle of code.
-    // So we MUST have an explicit "Stop Context" instruction.
-    // SYS_EXIT exits process.
-    // We don't have OP_CTX_EXIT.
-    // Workaround: JMP to end of file?
-    // Let's implement a JMP that goes to a "Safe Exit Zone" at the very end.
-    // For now, let's just use SYS_EXIT(0) which kills everything, to prove Worker finished.
-    // But wait, we want Main to print too.
-    // Let's make Worker loop 0 times?
-    // Hack: Use a dummy "Context Exit" by jumping to a known "Dead Zone" or just PUSH 0, JZ to self (infinite loop idle).
-    // Let's use Infinite Loop for Worker end: JMP -5 (back to start of loop?)
-    // Better: Infinite Yield Loop.
-    // LOOP: YIELD; JMP LOOP;
+    // Loop forever
     emit_u8(OP_YIELD);
-    emit_u8(OP_JMP); emit_u32(-6); // Jump back to YIELD (1 + 1 + 4 = 6 bytes back?)
-    // YIELD (1), JMP (1), Offset (4). Total 6. -6 points to YIELD.
+    emit_u8(OP_JMP); emit_u32(-6);
 
     // --- Main Function (Address: 40) ---
-    // Update JMP at top:
-    // Start (0) -> JMP(1) -> Offset(4). Next instruction is at 5.
-    // We want to jump to 40.
-    // Offset = 40 - 5 = 35. (So my guess was correct).
 
-    // Main:
     // SBRK (Init Heap)
     emit_u8(OP_PUSH); emit_u64(1024);
     emit_u8(OP_PUSH); emit_u64(SYS_SBRK);
@@ -122,8 +118,8 @@ int main() {
     emit_u8(OP_PUSH); emit_u64(111);
     emit_u8(OP_PRINT);
 
-    // Spawn Worker (Address 5)
-    emit_u8(OP_PUSH); emit_u64(5); // Address of Worker
+    // Spawn Worker (Address 13)
+    emit_u8(OP_PUSH); emit_u64(13); // Address of Worker
     emit_u8(OP_SPAWN);
 
     // Yield (Let Worker run)
@@ -146,6 +142,6 @@ int main() {
     emit_u8(OP_SYSCALL);
 
     fclose(f);
-    printf("Generated test.bin\n");
+    printf("Generated test.bin with Header\n");
     return 0;
 }
