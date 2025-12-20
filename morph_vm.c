@@ -29,6 +29,7 @@
 #define OP_WRITE  0x0D
 #define OP_CLOSE  0x0E
 #define OP_READ   0x0F
+#define OP_BREAK  0x10
 #define OP_EXIT   0xFF
 
 // VM State
@@ -44,6 +45,8 @@ typedef struct {
 } VM;
 
 VM vm;
+bool debug_mode = false;
+bool step_mode = false;
 
 void error(const char *msg) {
     fprintf(stderr, "Error: %s\n", msg);
@@ -65,14 +68,67 @@ uint64_t peek() {
     return vm.stack[vm.sp - 1];
 }
 
+// Debugger Shell
+void debug_shell() {
+    char cmd[256];
+    printf("\n--- Debugger (IP: %lu) ---\n", vm.ip);
+
+    while (1) {
+        printf("(dbg) ");
+        if (!fgets(cmd, sizeof(cmd), stdin)) break;
+
+        // Remove newline
+        cmd[strcspn(cmd, "\n")] = 0;
+
+        if (strcmp(cmd, "s") == 0 || strcmp(cmd, "step") == 0) {
+            step_mode = true;
+            break;
+        } else if (strcmp(cmd, "c") == 0 || strcmp(cmd, "continue") == 0) {
+            step_mode = false;
+            break;
+        } else if (strcmp(cmd, "st") == 0 || strcmp(cmd, "stack") == 0) {
+            printf("Stack [%lu]:\n", vm.sp);
+            for (int i = 0; i < vm.sp; i++) {
+                printf("  [%d] %lu (0x%lX)\n", i, vm.stack[i], vm.stack[i]);
+            }
+        } else if (strncmp(cmd, "m", 1) == 0) {
+            // usage: m <addr> <len>
+            uint64_t addr = 0;
+            int len = 16;
+            sscanf(cmd + 1, "%lu %d", &addr, &len);
+            if (addr + len > HEAP_SIZE) len = HEAP_SIZE - addr;
+
+            printf("Memory [%lu..%lu]:\n", addr, addr+len);
+            for (int i = 0; i < len; i++) {
+                printf("%02X ", vm.heap[addr+i]);
+                if ((i+1)%16 == 0) printf("\n");
+            }
+            printf("\n");
+        } else if (strcmp(cmd, "q") == 0 || strcmp(cmd, "quit") == 0) {
+            exit(0);
+        } else {
+            printf("Commands: s (step), c (continue), st (stack), m <addr> <len> (memory), q (quit)\n");
+        }
+    }
+}
+
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        printf("Usage: %s <binary_file>\n", argv[0]);
+    if (argc < 2) {
+        printf("Usage: %s [--debug] <binary_file>\n", argv[0]);
         return 1;
     }
 
+    const char *filename;
+    if (strcmp(argv[1], "--debug") == 0 || strcmp(argv[1], "-d") == 0) {
+        debug_mode = true;
+        filename = argv[2];
+        printf("Debugger Mode Enabled.\n");
+    } else {
+        filename = argv[1];
+    }
+
     // Load Binary
-    FILE *f = fopen(argv[1], "rb");
+    FILE *f = fopen(filename, "rb");
     if (!f) error("Could not open file");
     fseek(f, 0, SEEK_END);
     vm.code_size = ftell(f);
@@ -89,6 +145,11 @@ int main(int argc, char *argv[]) {
 
     // Execution Loop
     while (vm.ip < vm.code_size) {
+        // Debugger Hook
+        if (debug_mode && step_mode) {
+            debug_shell();
+        }
+
         uint8_t opcode = vm.code[vm.ip++];
 
         switch (opcode) {
@@ -214,6 +275,13 @@ int main(int argc, char *argv[]) {
                 if (ptr > HEAP_SIZE || len > HEAP_SIZE || ptr + len > HEAP_SIZE) error("Heap Buffer Out of Bounds");
                 ssize_t n = read((int)fd, &vm.heap[ptr], len);
                 push((uint64_t)n);
+                break;
+            }
+            case OP_BREAK: {
+                if (debug_mode) {
+                    printf("[BREAK] Hit breakpoint at IP: %lu\n", vm.ip - 1);
+                    debug_shell();
+                }
                 break;
             }
             case OP_EXIT: {

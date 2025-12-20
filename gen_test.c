@@ -22,6 +22,7 @@
 #define OP_WRITE  0x0D
 #define OP_CLOSE  0x0E
 #define OP_READ   0x0F
+#define OP_BREAK  0x10
 #define OP_EXIT   0xFF
 
 FILE *f;
@@ -60,6 +61,9 @@ int main() {
 
     // 2. Prepare Content "Morph" at Heap[64]
     emit_string_to_heap(64, "Morph");
+
+    // DEBUG TEST: BREAK BEFORE I/O
+    emit_u8(OP_BREAK);
 
     // 3. OPEN "data.txt" for Write (Mode 1)
     // Stack: [Ptr, Mode] -> OPEN -> Push FD
@@ -105,10 +109,11 @@ int main() {
     emit_u8(OP_CLOSE);
     // Stack: []
 
-    // 10. Verify Data: Print first char of Heap[128] ('M' = 77)
+    // 10. Verify Data: Print data at Heap[128]
+    // Note: LOAD reads 64-bit integer. "Morph" (5 bytes) + nulls will be read as a large integer.
     emit_u8(OP_PUSH); emit_u64(128); // Addr
     emit_u8(OP_LOAD);
-    // Stack: [77 (Ascii M)]
+    // Stack: [Integer representation of "Morph..."]
     emit_u8(OP_PRINT);
 
     // 11. Exit
