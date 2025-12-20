@@ -33,6 +33,9 @@ Setiap instruksi dimulai dengan 1 byte Opcode.
 | `0x0B` | **STORE**| - | Pop Alamat, Pop Nilai. Simpan Nilai ke [HP + Alamat]. |
 | `0x10` | **BREAK**| - | Pause eksekusi dan masuk ke Debugger Mode (jika aktif). |
 | `0x11` | **SYSCALL**| - | Pop ID, Jalankan System Call. |
+| `0x20` | **SPAWN** | - | Pop Address. Spawn new Context at Address. |
+| `0x21` | **YIELD** | - | Serahkan sisa time-slice ke Context lain (Cooperative Multitasking). |
+| `0x22` | **JOIN**  | - | Menunggu Context lain selesai (Belum diimplementasikan penuh). |
 
 ## System Calls (SYSCALL)
 
@@ -47,6 +50,3 @@ Argumen diambil dari Stack (Pop) sesuai urutan yang dibutuhkan.
 | `3` | **READ** | `Len`, `PtrBuffer`, `FD` | Baca file. Push BytesRead ke Stack. |
 | `4` | **WRITE**| `Len`, `PtrData`, `FD` | Tulis ke file. |
 | `5` | **SBRK** | `Increment` | Tambah ukuran Heap sebesar `Increment` bytes. Push alamat awal area baru (Old Break). |
-
-## Detail IO
-- **OPEN**: Mode 0 = Read Only, Mode 1 = Write Only (Create/Truncate).
