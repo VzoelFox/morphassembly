@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include "sha256.h"
 
 // MorphAssembly VM v0.6
 
@@ -68,6 +69,60 @@ typedef struct {
 VM vm;
 bool debug_mode = false;
 bool step_mode = false;
+
+void crash_report(const char *reason, const char *detail) {
+    fprintf(stderr, "\n[KEGAGALAN KRITIS] Pengecekan Integritas Gagal!\n");
+    fprintf(stderr, "Alasan: %s\n", reason);
+    if (detail) fprintf(stderr, "Detail: %s\n", detail);
+    fprintf(stderr, "Sistem dihentikan demi menjaga kejujuran.\n");
+    exit(1);
+}
+
+void verify_integrity(const char *bin_filename) {
+    // 1. Baca Manifest
+    FILE *f_chk = fopen("integrity.chk", "rb");
+    if (!f_chk) crash_report("Manifest Hilang", "File 'integrity.chk' tidak ditemukan.");
+
+    uint8_t expected_src_hash[32];
+    uint8_t expected_bin_hash[32];
+    if (fread(expected_src_hash, 1, 32, f_chk) != 32) crash_report("Manifest Rusak", "Gagal membaca Hash Source");
+    if (fread(expected_bin_hash, 1, 32, f_chk) != 32) crash_report("Manifest Rusak", "Gagal membaca Hash Binary");
+    fclose(f_chk);
+
+    // 2. Verifikasi Source Code (morph_vm.c)
+    FILE *f_src = fopen("morph_vm.c", "rb");
+    if (!f_src) crash_report("Source Hilang", "File 'morph_vm.c' harus ada untuk pemeriksaan kejujuran.");
+
+    SHA256_CTX ctx;
+    uint8_t buffer[1024];
+    size_t bytes;
+    uint8_t actual_src_hash[32];
+
+    sha256_init(&ctx);
+    while ((bytes = fread(buffer, 1, sizeof(buffer), f_src)) > 0) sha256_update(&ctx, buffer, bytes);
+    sha256_final(&ctx, actual_src_hash);
+    fclose(f_src);
+
+    if (memcmp(expected_src_hash, actual_src_hash, 32) != 0) {
+        crash_report("Pelanggaran Integritas Source Code", "File 'morph_vm.c' telah dimodifikasi!");
+    }
+
+    // 3. Verifikasi File Binary
+    FILE *f_bin = fopen(bin_filename, "rb");
+    if (!f_bin) crash_report("Binary Hilang", bin_filename);
+
+    uint8_t actual_bin_hash[32];
+    sha256_init(&ctx);
+    while ((bytes = fread(buffer, 1, sizeof(buffer), f_bin)) > 0) sha256_update(&ctx, buffer, bytes);
+    sha256_final(&ctx, actual_bin_hash);
+    fclose(f_bin);
+
+    if (memcmp(expected_bin_hash, actual_bin_hash, 32) != 0) {
+        crash_report("Pelanggaran Integritas Binary", "Bytecode yang dieksekusi berbeda dengan manifest!");
+    }
+
+    printf("[Sistem] Integritas Terverifikasi. Sesi Dipercaya.\n");
+}
 
 void error(const char *msg) {
     fprintf(stderr, "Error [Ctx %d]: %s\n", vm.current_context_id, msg);
@@ -174,6 +229,10 @@ int main(int argc, char *argv[]) {
         filename = argv[1];
     }
 
+    // --- INTEGRITY CHECK START ---
+    verify_integrity(filename);
+    // --- INTEGRITY CHECK END ---
+
     FILE *f = fopen(filename, "rb");
     if (!f) error("Could not open file");
     fseek(f, 0, SEEK_END);
@@ -184,6 +243,41 @@ int main(int argc, char *argv[]) {
     if (fread(vm.code, 1, vm.code_size, f) != vm.code_size) error("Read failed");
     fclose(f);
 
+    // Verify Header (Magic & Version)
+    if (vm.code_size < 8) crash_report("Binary Tidak Valid", "File terlalu kecil untuk header");
+    uint32_t magic = 0;
+    // Read Little Endian from byte array
+    magic |= (uint32_t)vm.code[0];
+    magic |= ((uint32_t)vm.code[1]) << 8;
+    magic |= ((uint32_t)vm.code[2]) << 16;
+    magic |= ((uint32_t)vm.code[3]) << 24;
+
+    if (magic != 0x4D4F5250) {
+        char msg[100];
+        sprintf(msg, "Magic Number Salah. Ditemukan: %08X", magic);
+        crash_report("Format Binary Tidak Valid", msg);
+    }
+    if (vm.code[4] != 0x01) crash_report("Versi Binary Tidak Valid", "Diharapkan v1");
+
+    // Adjust code pointer/size to skip header for execution
+    // Shift code buffer? Or just offset IP?
+    // Easier to shift IP starting point, but VM struct has base pointer.
+    // Let's shift the buffer content so IP=0 remains start of code.
+    // memmove(vm.code, vm.code + 8, vm.code_size - 8);
+    // vm.code_size -= 8;
+    // Actually, JMP offsets in gen_test might rely on absolute positions?
+    // My gen_test calculated offsets relative to current instruction.
+    // But Jump Target address?
+    // In gen_test: emit_u32(27); (Relative Jump?)
+    // OP_JMP implementation: ctx->ip += offset;
+    // So relative jumps work fine even if we shift.
+    // However, if we have absolute addresses (like PUSH FUNC_ADDR), those need to be correct.
+    // In gen_test: emit_u8(OP_PUSH); emit_u64(13); emit_u8(OP_SPAWN);
+    // Address 13 was calculated assuming file starts at 0.
+    // If we strip the header (8 bytes), the byte at offset 13 becomes offset 5.
+    // So if we strip header, we break absolute addresses hardcoded in PUSH.
+    // Solution: Keep header in memory, start execution at offset 8.
+
     // Init Global State
     vm.heap = NULL;
     vm.heap_capacity = 0;
@@ -191,7 +285,7 @@ int main(int argc, char *argv[]) {
     // Init Main Context (ID 0)
     for (int i=0; i<MAX_CONTEXTS; i++) vm.contexts[i].active = false;
     vm.contexts[0].active = true;
-    vm.contexts[0].ip = 0;
+    vm.contexts[0].ip = 8; // Start after Header
     vm.contexts[0].sp = 0;
     vm.current_context_id = 0;
     vm.active_count = 1;
