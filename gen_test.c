@@ -20,12 +20,19 @@
 #define OP_STORE  0x0B
 #define OP_BREAK  0x10
 #define OP_SYSCALL 0x11
+#define OP_AND    0x12
+#define OP_OR     0x13
+#define OP_XOR    0x14
+#define OP_NOT    0x15
+#define OP_SHL    0x16
+#define OP_SHR    0x17
 #define OP_SPAWN  0x20
 #define OP_YIELD  0x21
+#define OP_JOIN   0x22
 
 // Syscall IDs
 #define SYS_EXIT  0
-#define SYS_SBRK  5
+#define SYS_THREAD_EXIT 6
 
 FILE *f;
 
@@ -45,103 +52,95 @@ int main() {
     f = fopen("test.bin", "wb");
     if (!f) return 1;
 
-    printf("Generating Concurrency Test with Header...\n");
+    printf("Generating Comprehensive Test for Bitwise and Concurrency...\n");
 
     // --- Header ---
-    // Magic: "MORP" (0x4D4F5250)
-    // Version: 0x01
-    // Padding/Reserved: 3 bytes
     uint32_t magic = 0x4D4F5250;
     fwrite(&magic, 4, 1, f);
     emit_u8(0x01); // Version
-    emit_u8(0x00); // Reserved
-    emit_u8(0x00); // Reserved
-    emit_u8(0x00); // Reserved
-    // Total Header Size = 8 bytes.
-    // Code starts at offset 8.
+    emit_u8(0x00); emit_u8(0x00); emit_u8(0x00); // Reserved
 
-    // Strategy:
-    // 1. Jump to Main
-    // 2. Define Worker Function
-    // 3. Main Function
+    // --- PART 1: Bitwise Operations Test ---
+    // 1. AND: 5 & 3 = 1
+    emit_u8(OP_PUSH); emit_u64(5);
+    emit_u8(OP_PUSH); emit_u64(3);
+    emit_u8(OP_AND);
+    emit_u8(OP_PRINT);
+    // 2. OR: 5 | 3 = 7
+    emit_u8(OP_PUSH); emit_u64(5);
+    emit_u8(OP_PUSH); emit_u64(3);
+    emit_u8(OP_OR);
+    emit_u8(OP_PRINT);
+    // 3. XOR: 5 ^ 3 = 6
+    emit_u8(OP_PUSH); emit_u64(5);
+    emit_u8(OP_PUSH); emit_u64(3);
+    emit_u8(OP_XOR);
+    emit_u8(OP_PRINT);
+    // 4. NOT: ~5
+    emit_u8(OP_PUSH); emit_u64(5);
+    emit_u8(OP_NOT);
+    emit_u8(OP_PRINT);
+    // 5. SHL: 5 << 2 = 20
+    emit_u8(OP_PUSH); emit_u64(5);
+    emit_u8(OP_PUSH); emit_u64(2);
+    emit_u8(OP_SHL);
+    emit_u8(OP_PRINT);
+    // 6. SHR: 20 >> 2 = 5
+    emit_u8(OP_PUSH); emit_u64(20);
+    emit_u8(OP_PUSH); emit_u64(2);
+    emit_u8(OP_SHR);
+    emit_u8(OP_PRINT);
 
-    // Offset math:
-    // Current file pos = 8.
-    // Instruction: JMP (1) + Offset (4) = 5 bytes.
-    // Next instruction (Worker) starts at 8 + 5 = 13.
+    // --- PART 2: Concurrency (JOIN) Test ---
 
-    // Worker logic same as before.
-    // Worker Body:
-    // PUSH 888 (9) + PRINT (1) = 10
-    // YIELD (1)
-    // PUSH 999 (9) + PRINT (1) = 10
-    // YIELD (1) + JMP (1) + Offset(-6) (4) = 6
-    // Total Worker Size = 10 + 1 + 10 + 6 = 27 bytes.
+    // The concurrency test needs to jump over its worker function.
+    // Let's calculate the start address of the main logic and the worker function.
+    long bitwise_tests_end_pos = ftell(f);
 
-    // Worker starts at 13. Ends at 13 + 27 = 40.
-    // Main starts at 40.
+    // Worker function size:
+    // PUSH 888, PRINT (10) + PUSH 999, PRINT (10) + PUSH SYS_THREAD_EXIT, SYSCALL (10) = 30 bytes
+    long worker_size = 30;
 
-    // JMP at 8 wants to go to 40.
-    // JMP is at 8. IP after JMP read (opcode+operand) is 8 + 1 + 4 = 13.
-    // Target 40.
-    // Offset = 40 - 13 = 27.
+    // The JMP instruction is 5 bytes. It will be placed right after the bitwise tests.
+    // The worker function will be placed after the JMP.
+    // The main concurrency logic will be placed after the worker function.
 
-    // --- JMP to Main ---
+    // The address of the worker will be the end of the bitwise tests + size of the JMP instruction.
+    long worker_address = bitwise_tests_end_pos + 5;
+
+    // The JMP needs to jump *over* the worker function. So the offset is the worker's size.
     emit_u8(OP_JMP);
-    emit_u32(27); // Jump over Worker to Main
+    emit_u32((uint32_t)worker_size);
 
-    // --- Worker Function (Address: 13) ---
-    // Print 888 (Worker 1)
+    // Write the Worker Function (at calculated worker_address)
     emit_u8(OP_PUSH); emit_u64(888);
     emit_u8(OP_PRINT);
-
-    // Yield
-    emit_u8(OP_YIELD);
-
-    // Print 999 (Worker 2)
     emit_u8(OP_PUSH); emit_u64(999);
     emit_u8(OP_PRINT);
-
-    // Loop forever
-    emit_u8(OP_YIELD);
-    emit_u8(OP_JMP); emit_u32(-6);
-
-    // --- Main Function (Address: 40) ---
-
-    // SBRK (Init Heap)
-    emit_u8(OP_PUSH); emit_u64(1024);
-    emit_u8(OP_PUSH); emit_u64(SYS_SBRK);
+    emit_u8(OP_PUSH); emit_u64(SYS_THREAD_EXIT);
     emit_u8(OP_SYSCALL);
-    emit_u8(OP_POP);
 
-    // Print 111 (Main 1)
-    emit_u8(OP_PUSH); emit_u64(111);
+    // Write the Main Concurrency Logic
+    emit_u8(OP_PUSH); emit_u64(111); // "Main Start"
     emit_u8(OP_PRINT);
 
-    // Spawn Worker (Address 13)
-    emit_u8(OP_PUSH); emit_u64(13); // Address of Worker
-    emit_u8(OP_SPAWN);
+    emit_u8(OP_PUSH); emit_u64(worker_address); // Worker address
+    emit_u8(OP_SPAWN);                          // Returns child ID
 
-    // Yield (Let Worker run)
-    emit_u8(OP_YIELD);
+    emit_u8(OP_DUP);                            // Dup the ID for printing
+    emit_u8(OP_PRINT);                          // Print the ID
 
-    // Print 222 (Main 2)
-    emit_u8(OP_PUSH); emit_u64(222);
+    emit_u8(OP_JOIN);                           // Wait for worker to finish
+
+    emit_u8(OP_PUSH); emit_u64(222);            // "Main After Join"
     emit_u8(OP_PRINT);
 
-    // Yield (Let Worker run again)
-    emit_u8(OP_YIELD);
-
-    // Print 333 (Main 3)
-    emit_u8(OP_PUSH); emit_u64(333);
-    emit_u8(OP_PRINT);
-
-    // Exit All
+    // --- Final Exit ---
     emit_u8(OP_PUSH); emit_u64(0);
     emit_u8(OP_PUSH); emit_u64(SYS_EXIT);
     emit_u8(OP_SYSCALL);
 
     fclose(f);
-    printf("Generated test.bin with Header\n");
+    printf("Generated test.bin\n");
     return 0;
 }
