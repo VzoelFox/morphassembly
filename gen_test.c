@@ -22,10 +22,11 @@
 #define OP_SYSCALL 0x11
 #define OP_SPAWN  0x20
 #define OP_YIELD  0x21
+#define OP_JOIN   0x22
 
 // Syscall IDs
 #define SYS_EXIT  0
-#define SYS_SBRK  5
+#define SYS_THREAD_EXIT 6
 
 FILE *f;
 
@@ -45,103 +46,67 @@ int main() {
     f = fopen("test.bin", "wb");
     if (!f) return 1;
 
-    printf("Generating Concurrency Test with Header...\n");
+    printf("Generating final JOIN test with Thread Exit...\n");
 
-    // --- Header ---
-    // Magic: "MORP" (0x4D4F5250)
-    // Version: 0x01
-    // Padding/Reserved: 3 bytes
+    // --- Final Structure ---
+    // 1. Header (8 bytes)
+    // 2. JMP (5 bytes) -> Jumps over worker
+    // 3. Worker (30 bytes)
+    // 4. Main (...)
+
+    // --- Calculate Worker Size ---
+    // PUSH 888, PRINT: 10 bytes
+    // PUSH 999, PRINT: 10 bytes
+    // PUSH SYS_THREAD_EXIT, SYSCALL: 10 bytes
+    // TOTAL Worker: 30 bytes
+
+    // --- Calculate JMP Offset ---
+    // JMP is at file position 8.
+    // After JMP instruction is read, IP will be 8 + 5 = 13.
+    // Worker code starts at 13.
+    // Main code starts at 13 + 30 = 43.
+    // The JMP needs to go from IP=13 to address 43.
+    // Offset = 43 - 13 = 30.
+
+    // --- Generation ---
+    // Header
     uint32_t magic = 0x4D4F5250;
     fwrite(&magic, 4, 1, f);
-    emit_u8(0x01); // Version
-    emit_u8(0x00); // Reserved
-    emit_u8(0x00); // Reserved
-    emit_u8(0x00); // Reserved
-    // Total Header Size = 8 bytes.
-    // Code starts at offset 8.
+    emit_u8(0x01);
+    emit_u8(0x00); emit_u8(0x00); emit_u8(0x00);
 
-    // Strategy:
-    // 1. Jump to Main
-    // 2. Define Worker Function
-    // 3. Main Function
-
-    // Offset math:
-    // Current file pos = 8.
-    // Instruction: JMP (1) + Offset (4) = 5 bytes.
-    // Next instruction (Worker) starts at 8 + 5 = 13.
-
-    // Worker logic same as before.
-    // Worker Body:
-    // PUSH 888 (9) + PRINT (1) = 10
-    // YIELD (1)
-    // PUSH 999 (9) + PRINT (1) = 10
-    // YIELD (1) + JMP (1) + Offset(-6) (4) = 6
-    // Total Worker Size = 10 + 1 + 10 + 6 = 27 bytes.
-
-    // Worker starts at 13. Ends at 13 + 27 = 40.
-    // Main starts at 40.
-
-    // JMP at 8 wants to go to 40.
-    // JMP is at 8. IP after JMP read (opcode+operand) is 8 + 1 + 4 = 13.
-    // Target 40.
-    // Offset = 40 - 13 = 27.
-
-    // --- JMP to Main ---
+    // JMP to Main
     emit_u8(OP_JMP);
-    emit_u32(27); // Jump over Worker to Main
+    emit_u32(30); // Jump over the worker code (30 bytes)
 
-    // --- Worker Function (Address: 13) ---
-    // Print 888 (Worker 1)
+    // Worker Function (starts at address 13)
     emit_u8(OP_PUSH); emit_u64(888);
     emit_u8(OP_PRINT);
-
-    // Yield
-    emit_u8(OP_YIELD);
-
-    // Print 999 (Worker 2)
     emit_u8(OP_PUSH); emit_u64(999);
     emit_u8(OP_PRINT);
+    emit_u8(OP_PUSH); emit_u64(SYS_THREAD_EXIT); // Push syscall ID
+    emit_u8(OP_SYSCALL);                         // Exit this thread
 
-    // Loop forever
-    emit_u8(OP_YIELD);
-    emit_u8(OP_JMP); emit_u32(-6);
-
-    // --- Main Function (Address: 40) ---
-
-    // SBRK (Init Heap)
-    emit_u8(OP_PUSH); emit_u64(1024);
-    emit_u8(OP_PUSH); emit_u64(SYS_SBRK);
-    emit_u8(OP_SYSCALL);
-    emit_u8(OP_POP);
-
-    // Print 111 (Main 1)
-    emit_u8(OP_PUSH); emit_u64(111);
+    // Main Function (starts at address 43)
+    emit_u8(OP_PUSH); emit_u64(111); // "Main Start"
     emit_u8(OP_PRINT);
 
-    // Spawn Worker (Address 13)
-    emit_u8(OP_PUSH); emit_u64(13); // Address of Worker
-    emit_u8(OP_SPAWN);
+    emit_u8(OP_PUSH); emit_u64(13);  // Worker address
+    emit_u8(OP_SPAWN);               // Returns child ID
 
-    // Yield (Let Worker run)
-    emit_u8(OP_YIELD);
+    emit_u8(OP_DUP);                 // Dup the ID for printing
+    emit_u8(OP_PRINT);               // Print the ID
 
-    // Print 222 (Main 2)
-    emit_u8(OP_PUSH); emit_u64(222);
+    emit_u8(OP_JOIN);                // Wait for worker to finish
+
+    emit_u8(OP_PUSH); emit_u64(222); // "Main After Join"
     emit_u8(OP_PRINT);
 
-    // Yield (Let Worker run again)
-    emit_u8(OP_YIELD);
-
-    // Print 333 (Main 3)
-    emit_u8(OP_PUSH); emit_u64(333);
-    emit_u8(OP_PRINT);
-
-    // Exit All
-    emit_u8(OP_PUSH); emit_u64(0);
-    emit_u8(OP_PUSH); emit_u64(SYS_EXIT);
-    emit_u8(OP_SYSCALL);
+    emit_u8(OP_PUSH); emit_u64(0);        // Exit code
+    emit_u8(OP_PUSH); emit_u64(SYS_EXIT); // Syscall ID
+    emit_u8(OP_SYSCALL);                 // Exit whole VM
 
     fclose(f);
-    printf("Generated test.bin with Header\n");
+    printf("Generated test.bin\n");
     return 0;
 }
