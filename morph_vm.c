@@ -28,12 +28,6 @@
 #define OP_STORE  0x0B
 #define OP_BREAK  0x10
 #define OP_SYSCALL 0x11
-#define OP_AND    0x12
-#define OP_OR     0x13
-#define OP_XOR    0x14
-#define OP_NOT    0x15
-#define OP_SHL    0x16
-#define OP_SHR    0x17
 #define OP_SPAWN  0x20
 #define OP_YIELD  0x21
 #define OP_JOIN   0x22
@@ -387,14 +381,6 @@ int main(int argc, char *argv[]) {
                 if (debug_mode) { printf("[BREAK] Ctx: %d IP: %lu\n", vm.current_context_id, ctx->ip - 1); debug_shell(); }
                 break;
             }
-
-            // --- BITWISE OPCODES ---
-            case OP_AND: { uint64_t b = pop(); uint64_t a = pop(); push(a & b); break; }
-            case OP_OR:  { uint64_t b = pop(); uint64_t a = pop(); push(a | b); break; }
-            case OP_XOR: { uint64_t b = pop(); uint64_t a = pop(); push(a ^ b); break; }
-            case OP_NOT: { uint64_t a = pop(); push(~a); break; }
-            case OP_SHL: { uint64_t b = pop(); uint64_t a = pop(); push(a << b); break; }
-            case OP_SHR: { uint64_t b = pop(); uint64_t a = pop(); push(a >> b); break; }
 
             // --- CONCURRENCY OPCODES ---
             case OP_SPAWN: {

@@ -33,12 +33,6 @@ Setiap instruksi dimulai dengan 1 byte Opcode.
 | `0x0B` | **STORE**| - | Pop Alamat, Pop Nilai. Simpan Nilai ke [HP + Alamat]. |
 | `0x10` | **BREAK**| - | Pause eksekusi dan masuk ke Debugger Mode (jika aktif). |
 | `0x11` | **SYSCALL**| - | Pop ID, Jalankan System Call. |
-| `0x12` | **AND**  | - | Pop A, Pop B. Push (B & A). |
-| `0x13` | **OR**   | - | Pop A, Pop B. Push (B \| A). |
-| `0x14` | **XOR**  | - | Pop A, Pop B. Push (B ^ A). |
-| `0x15` | **NOT**  | - | Pop A. Push (~A). |
-| `0x16` | **SHL**  | - | Pop A (shift amount), Pop B (value). Push (B << A). |
-| `0x17` | **SHR**  | - | Pop A (shift amount), Pop B (value). Push (B >> A). |
 | `0x20` | **SPAWN** | - | Pop Address. Spawn new Context at Address. |
 | `0x21` | **YIELD** | - | Serahkan sisa time-slice ke Context lain (Cooperative Multitasking). |
 | `0x22` | **JOIN**  | - | Menunggu Context lain selesai (Belum diimplementasikan penuh). |

@@ -1,4 +1,11 @@
+# Executables
 morph_vm
-*.bin
-__pycache__/
-*.pyc
+gen_test
+integrity_gen
+
+# Object files
+*.o
+
+# Generated files
+test.bin
+integrity.chk
