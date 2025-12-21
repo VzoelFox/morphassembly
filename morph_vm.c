@@ -39,16 +39,22 @@
 #define SYS_READ  3
 #define SYS_WRITE 4
 #define SYS_SBRK  5
+#define SYS_THREAD_EXIT 6
 
-// Context Structure (Fragment)
+// Context State
+typedef enum {
+    CONTEXT_UNUSED,
+    CONTEXT_ACTIVE,
+    CONTEXT_JOINING,
+} ContextStatus;
+
+// Context Structure
 typedef struct {
     uint64_t ip;
     uint64_t stack[STACK_SIZE];
     uint64_t sp;
-    bool active;
-    bool joined; // If true, another context is waiting for this to finish? Or this is waiting?
-                 // Simple join: Context X waits for Context Y.
-                 // Let's keep it simple: No explicit join waiting logic in struct yet, just simple round robin.
+    ContextStatus status;
+    int joining_on_id; // ID of the context this context is waiting for.
 } Context;
 
 // VM State
@@ -158,15 +164,19 @@ void schedule() {
     int next = (start + 1) % MAX_CONTEXTS;
 
     while (next != start) {
-        if (vm.contexts[next].active) {
+        // Find the next active, non-joining context
+        if (vm.contexts[next].status == CONTEXT_ACTIVE) {
             vm.current_context_id = next;
             return;
         }
         next = (next + 1) % MAX_CONTEXTS;
     }
-    // No other active context found, stay on current (if active)
-    if (!vm.contexts[start].active) {
-        // All dead
+
+    // If no other context is found, check if the current one is still active.
+    // If not, it means all contexts are either unused or joining, which could be a deadlock or program end.
+    if (vm.contexts[start].status != CONTEXT_ACTIVE) {
+        // For now, if the current thread isn't active, we assume it's the end.
+        // A more complex scheduler would check for deadlocks (all threads joining).
         exit(0);
     }
 }
@@ -282,9 +292,12 @@ int main(int argc, char *argv[]) {
     vm.heap = NULL;
     vm.heap_capacity = 0;
 
+    // Init Contexts
+    for (int i=0; i<MAX_CONTEXTS; i++) {
+        vm.contexts[i].status = CONTEXT_UNUSED;
+    }
     // Init Main Context (ID 0)
-    for (int i=0; i<MAX_CONTEXTS; i++) vm.contexts[i].active = false;
-    vm.contexts[0].active = true;
+    vm.contexts[0].status = CONTEXT_ACTIVE;
     vm.contexts[0].ip = 8; // Start after Header
     vm.contexts[0].sp = 0;
     vm.current_context_id = 0;
@@ -294,12 +307,27 @@ int main(int argc, char *argv[]) {
     while (vm.active_count > 0) {
         Context *ctx = current_ctx();
 
+        if (ctx->status != CONTEXT_ACTIVE) {
+            // This context is not active (e.g., joining), so schedule another one.
+            schedule();
+            continue;
+        }
+
         // Check bounds
         if (ctx->ip >= vm.code_size) {
             // Implicit exit of context if it runs out of code
-            ctx->active = false;
+            ctx->status = CONTEXT_UNUSED;
             vm.active_count--;
-            schedule();
+
+            // Check if other contexts were waiting on this one to finish
+            for (int i = 0; i < MAX_CONTEXTS; i++) {
+                if (vm.contexts[i].status == CONTEXT_JOINING && vm.contexts[i].joining_on_id == vm.current_context_id) {
+                    vm.contexts[i].status = CONTEXT_ACTIVE; // Wake up the waiting context
+                    vm.contexts[i].joining_on_id = -1; // Clear the join target
+                }
+            }
+
+            if (vm.active_count > 0) schedule();
             continue;
         }
 
@@ -359,19 +387,32 @@ int main(int argc, char *argv[]) {
                 uint64_t func_addr = pop();
                 int new_id = -1;
                 for (int i=0; i<MAX_CONTEXTS; i++) {
-                    if (!vm.contexts[i].active) { new_id = i; break; }
+                    if (vm.contexts[i].status == CONTEXT_UNUSED) { new_id = i; break; }
                 }
                 if (new_id == -1) error("Max Contexts Exceeded");
 
-                vm.contexts[new_id].active = true;
+                vm.contexts[new_id].status = CONTEXT_ACTIVE;
                 vm.contexts[new_id].ip = func_addr;
                 vm.contexts[new_id].sp = 0;
                 vm.active_count++;
-                // Push ID of new thread to parent? Maybe.
+                push((uint64_t)new_id); // Push the new context's ID onto the parent's stack.
                 break;
             }
             case OP_YIELD: {
                 schedule();
+                break;
+            }
+
+            case OP_JOIN: {
+                uint64_t join_id = pop();
+                if (join_id >= MAX_CONTEXTS || vm.contexts[join_id].status == CONTEXT_UNUSED) {
+                    // Trying to join on an invalid or non-existent context.
+                    // We could push an error code, but for now, let's just treat it as a NOP.
+                } else {
+                    ctx->status = CONTEXT_JOINING;
+                    ctx->joining_on_id = join_id;
+                    schedule(); // Yield execution
+                }
                 break;
             }
 
@@ -421,6 +462,20 @@ int main(int argc, char *argv[]) {
                         vm.heap = n;
                         vm.heap_capacity += inc;
                         push(old);
+                        break;
+                    }
+                    case SYS_THREAD_EXIT: {
+                        ctx->status = CONTEXT_UNUSED;
+                        vm.active_count--;
+
+                        for (int i = 0; i < MAX_CONTEXTS; i++) {
+                            if (vm.contexts[i].status == CONTEXT_JOINING && vm.contexts[i].joining_on_id == vm.current_context_id) {
+                                vm.contexts[i].status = CONTEXT_ACTIVE;
+                                vm.contexts[i].joining_on_id = -1;
+                            }
+                        }
+
+                        if (vm.active_count > 0) schedule();
                         break;
                     }
                     default: error("Unknown Syscall");
